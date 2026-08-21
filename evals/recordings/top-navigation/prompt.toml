@@ -1,0 +1,7 @@
+name = "top-navigation"
+fixture = "blank"
+prompt_version = "v0"
+prompt = "I need a top navigtion"
+model = "local"
+base_url = "http://localhost:8080"
+recorded_at = "2026-08-21T07:00:31.102234+00:00"

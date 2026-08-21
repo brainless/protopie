@@ -1,0 +1,18 @@
+[package]
+name = "evals"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "evals"
+path = "src/main.rs"
+
+[dependencies]
+llm-sdk = { path = "../../llm-sdk" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["clock"], default-features = false }
