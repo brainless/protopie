@@ -1,6 +1,6 @@
 # Epic 002: System Prompt Generator
 
-**Status:** Not started
+**Status:** Done
 **Goal:** Build a deterministic, unit-testable system-prompt generator, and wire `evals record` to call it instead of accepting free-text system prompts, so system-prompt changes are as evaluable as the prompts they wrap.
 
 ---
@@ -60,13 +60,13 @@ fn generate_system_prompt(stack: &TechStack, recent_changes: &[ChangeSummary]) -
 
 ## Tasks
 
-- [ ] Decide and document the generator's exact module/crate placement (likely inside `evals` for now, given `agents` doesn't exist yet — avoid speculatively standing up the full `agents` crate from `DEVELOP.md` §2 for one function).
-- [ ] Define `TechStack` as a fixed v1 constant describing the scaffold stack.
-- [ ] Define `ChangeSummary` (or similarly named) as a plain struct for one prior brain-dump's text — the minimal shape needed now, extensible later for commit-derived summaries.
-- [ ] Implement `generate_system_prompt(stack, recent_changes) -> String` as a pure function.
-- [ ] Write unit tests constructing `recent_changes` in memory (empty, one entry, several entries) and asserting on the generated prompt content — no fixture files, no database.
-- [ ] Extend `evals record` (and the recording format) to call the generator and persist the generated system prompt alongside `prompt.toml`/`response.json`.
-- [ ] Record at least one new case re-running an existing baseline prompt (e.g. `top-navigation`) through the generated system prompt.
-- [ ] Write `assertions.toml` for that new recording asserting SolidJS-shaped output and the absence of vanilla-HTML tells; verify `evals test` passes deterministically.
-- [ ] Update `evals/README.md` to document system-prompt generation as part of the record workflow (superseding the "record does not add a system prompt" note from epic 001).
-- [ ] Note, but do not implement, the two future dependencies for real "recent changes" data: a minimal SQLite-backed brain-dump store, and a deterministic auto-commit-after-build feature feeding `git log`. Leave both as candidates for future epics.
+- [x] Decide and document the generator's exact module/crate placement — placed in a new `agents` crate (workspace member), not inside `evals`: this is real product code (`DEVELOP.md` §2), not eval-only infrastructure, so it belongs where future generator strategies will also live.
+- [x] Define `TechStack` as a fixed v1 constant describing the scaffold stack (`agents/src/system_prompt.rs::TechStack::V1`).
+- [x] Define `ChangeSummary` as a plain struct for one prior brain-dump's text.
+- [x] Implement `generate_system_prompt(stack, recent_changes) -> String` as a pure function.
+- [x] Write unit tests constructing `recent_changes` in memory (empty, one entry, several entries) and asserting on the generated prompt content — no fixture files, no database.
+- [x] Extend `evals record` (and the recording format) to call the generator and persist the generated system prompt alongside `prompt.toml`/`response.json`, and to actually send it as the LLM system message.
+- [x] Record at least one new case re-running an existing baseline prompt (`top-navigation` → `top-navigation-system-prompt`) through the generated system prompt.
+- [x] Write `assertions.toml` for that new recording asserting SolidJS-shaped output and the absence of vanilla-HTML tells; verify `evals test` passes deterministically.
+- [x] Update `evals/README.md` to document system-prompt generation as part of the record workflow (superseding the "record does not add a system prompt" note from epic 001).
+- [x] Note, but do not implement, the two future dependencies for real "recent changes" data: a minimal SQLite-backed brain-dump store, and a deterministic auto-commit-after-build feature feeding `git log`. Already recorded above under "What we are NOT deciding" — left as candidates for future epics.

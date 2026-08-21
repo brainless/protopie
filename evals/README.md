@@ -26,11 +26,11 @@ cargo run -p evals -- record <name> --fixture <fixture> --prompt "<text>"
 - `--prompt-version`, `--model`, `--temperature`, `--max-tokens` are optional and stored alongside the recording for reproducibility.
 - Fails if `<name>` already has a recording — pass `--force` to re-record after changing the prompt or model.
 
-The prompt sent is exactly the `--prompt`/`--prompt-file` text — `record` does not add a system prompt or any stack-specific framing. Don't expect SolidJS/Tailwind/DaisyUI-aware output unless the prompt itself asks for it.
+`record` also sends a system prompt: it calls `agents::generate_system_prompt` (a pure, deterministic function — see `agents/src/system_prompt.rs`) with the fixed v1 `TechStack` and, for now, an empty recent-changes history (no real history source exists yet — see `epics/002-system-prompt-generator.md`). This is what makes output SolidJS/Tailwind/DaisyUI-shaped instead of vanilla HTML/CSS/JS.
 
 This writes two files into `evals/recordings/<name>/`:
 
-- `prompt.toml` — fixture name, prompt text, prompt version, model/settings, timestamp.
+- `prompt.toml` — fixture name, prompt text, prompt version, the generated system prompt, model/settings, timestamp.
 - `response.json` — the raw response plus `latency_ms`.
 
 Both are checked into git as-is; that's the point — every prompt you try lands in git for later inspection, no pre-authoring required.

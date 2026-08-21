@@ -8,6 +8,7 @@ name = "evals"
 path = "src/main.rs"
 
 [dependencies]
+agents = { path = "../agents" }
 llm-sdk = { path = "../../llm-sdk" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }

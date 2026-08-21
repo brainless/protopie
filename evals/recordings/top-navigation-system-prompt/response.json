@@ -1,0 +1,24 @@
+{
+  "latency_ms": 74504,
+  "response": {
+    "id": "chatcmpl-FzhqrzBsyusxwQ0zz0yM4b7ctnl36hrC",
+    "object": "chat.completion",
+    "created": 1787312314,
+    "model": "/Users/brainless/hf_models/models--unsloth--Qwen3.5-9B-GGUF/snapshots/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-UD-Q4_K_XL.gguf",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "Here is a responsive top navigation component built with SolidJS, Solid Router, and DaisyUI.\n\nIt includes a mobile menu toggle, active link highlighting based on the current URL, and proper layout using Tailwind/DaisyUI classes.\n\n```tsx\nimport { createSignal, createEffect, onMount } from \"solid-js\";\nimport { A } from \"@solidjs/router\";\nimport { ChevronDown } from \"lucide-solid\";\n\nexport interface NavItem {\n  label: string;\n  href: string;\n  children?: NavItem[];\n}\n\nexport default function Navbar() {\n  const [isOpen, setIsOpen] = createSignal(false);\n  \n  // Define navigation items\n  const navItems: NavItem[] = [\n    { label: \"Home\", href: \"/\" },\n    { label: \"Projects\", href: \"/projects\" },\n    { label: \"About\", href: \"/about\" },\n    { label: \"Contact\", href: \"/contact\" },\n  ];\n\n  // Update active state based on current URL\n  createEffect(() => {\n    const path = window.location.pathname;\n    // Close mobile menu on route change\n    setIsOpen(false);\n  });\n\n  return (\n    <div class=\"navbar bg-base-100 shadow-md min-h-[60px] z-50\">\n      <div class=\"navbar-start\">\n        <div class=\"dropdown\">\n          <div \n            tabIndex={0} \n            role=\"button\" \n            class=\"btn btn-ghost lg:hidden\"\n            onClick={() => setIsOpen(!isOpen())}\n          >\n            <svg xmlns=\"http://www.w3.org/2000/svg\" class=\"h-5 w-5\" fill=\"none\" viewBox=\"0 0 24 24\" stroke=\"currentColor\">\n              <path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M4 6h16M4 12h8m-8 6h16\" />\n            </svg>\n          </div>\n          <ul\n            tabIndex={0}\n            class={`menu menu-sm dropdown-content mt-3 z-[1] p-2 shadow bg-base-100 rounded-box w-52 transition-all duration-200 ${isOpen() ? \"block\" : \"hidden\"}`}\n          >\n            {navItems.map((item) => (\n              <li key={item.href}>\n                <A href={item.href} class={`link ${item.href === window.location.pathname ? \"link-active\" : \"\"}`}>\n                  {item.label}\n                </A>\n              </li>\n            ))}\n          </ul>\n        </div>\n        <A href=\"/\" class=\"btn btn-ghost text-xl font-bold\">\n          BrandLogo\n        </A>\n      </div>\n      \n      <div class=\"navbar-center hidden lg:flex\">\n        <ul class=\"menu menu-horizontal px-1\">\n          {navItems.map((item) => (\n            <li key={item.href}>\n              <A \n                href={item.href} \n                class={`link ${item.href === window.location.pathname ? \"link-active\" : \"\"}`}\n              >\n                {item.label}\n              </A>\n            </li>\n          ))}\n        </ul>\n      </div>\n\n      <div class=\"navbar-end\">\n        <A href=\"/dashboard\" class=\"btn btn-primary btn-sm\">\n          Dashboard\n        </A>\n      </div>\n    </div>\n  );\n}\n```"
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 147,
+      "completion_tokens": 1151,
+      "total_tokens": 1298
+    }
+  }
+}

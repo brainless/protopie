@@ -1,3 +1,4 @@
+use agents::{generate_system_prompt, TechStack};
 use anyhow::{bail, Context, Result};
 use llm_sdk::llama_cpp::client::LlamaCppClient;
 use llm_sdk::llama_cpp::types::LlamaCppChatCompletionResponse;
@@ -16,6 +17,7 @@ struct PromptRecord {
     fixture: String,
     prompt_version: String,
     prompt: String,
+    system_prompt: String,
     model: String,
     base_url: String,
     temperature: Option<f32>,
@@ -76,12 +78,18 @@ pub async fn run(args: RecordArgs) -> Result<()> {
         .clone()
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
 
+    // No real "recent changes" history source exists yet (store/git are both deferred —
+    // see epics/002-system-prompt-generator.md), so record calls the generator with an
+    // empty history for now.
+    let system_prompt = generate_system_prompt(&TechStack::V1, &[]);
+
     let mut client = LlamaCppClient::new().context("building llama.cpp client")?;
     client = client.with_base_url(base_url.clone());
 
     let mut builder = client
         .message_builder()
         .model(args.model.clone())
+        .system_message(system_prompt.clone())
         .user_message(prompt.clone());
     if let Some(temperature) = args.temperature {
         builder = builder.temperature(temperature);
@@ -109,6 +117,7 @@ pub async fn run(args: RecordArgs) -> Result<()> {
         fixture: args.fixture.clone(),
         prompt_version: args.prompt_version.clone(),
         prompt,
+        system_prompt,
         model: args.model.clone(),
         base_url,
         temperature: args.temperature,

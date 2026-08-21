@@ -1,0 +1,2 @@
+contains = ["createSignal", "@solidjs/router", "navbar"]
+not_contains = ["<!DOCTYPE html>", "document.querySelector", "document.getElementById"]

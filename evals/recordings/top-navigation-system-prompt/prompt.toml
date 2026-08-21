@@ -1,0 +1,18 @@
+name = "top-navigation-system-prompt"
+fixture = "blank"
+prompt_version = "v0"
+prompt = "I need a top navigtion"
+system_prompt = """
+You are generating code for a protopie project. The project's fixed stack is:
+- Framework: SolidJS + TypeScript + Vite
+- Routing: Solid Router
+- Styling: TailwindCSS + DaisyUI
+- Data: all data comes from fetch() calls to a local mock-data HTTP proxy route per entity; never import a JSON fixture directly into a component
+
+This is a fresh project with no prior changes yet.
+
+Generate only code consistent with this stack (SolidJS components, Solid Router routes, Tailwind/DaisyUI classes). Never produce plain HTML/CSS/vanilla-JS output.
+"""
+model = "local"
+base_url = "http://localhost:8080"
+recorded_at = "2026-08-21T11:38:34.808101+00:00"
