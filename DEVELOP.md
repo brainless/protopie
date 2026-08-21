@@ -71,6 +71,8 @@ There are two execution layers:
 - **Live evaluation** — calls a pinned local model through `llm-sdk`. Capture the model identifier and relevant llama.cpp settings, prompt version, complete assembled prompt, raw response, parsed operations, applied changes, validation output, latency, token counts when available, and retries. Live runs measure model and prompt behavior and are opt-in when a local endpoint is required.
 - **Deterministic replay** — starts from the same scaffold and feeds recorded raw responses through the same parser, operation validator, application path, and checks without an LLM or network access. It must reproduce the same terminal source tree and validation outcomes, including safe rejection of malformed responses. Replay tests isolate deterministic machinery and are suitable for ordinary automated testing.
 
+See [`evals/README.md`](evals/README.md) for day-to-day `evals record`/`evals test` CLI usage and how to create a fixture — this section stays about the model, that one about the tool.
+
 Fixed scenarios invite overfitting. Prompt examples should use domains different from the evaluated app, prompt growth must remain visible in traces, and later epics should add held-out evolution sequences before a strategy is treated as general.
 
 Component-level tests still matter inside that larger loop:
