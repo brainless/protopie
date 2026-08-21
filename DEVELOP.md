@@ -17,8 +17,10 @@ protopie/
 ├── store/                      # SQLite: projects, brain-dumps, task records, FTS + vector search
 ├── scaffold/                   # deterministic project scaffolder: emits the initial SolidJS + Vite +
 │                                #   Tailwind + DaisyUI + Solid Router project structure, mock-data proxy
-├── evals/                      # ordered evolution scenarios, live-model traces, replay fixtures and reports
+├── evals/                      # record/test harness, checked-in recordings (prompt + raw response + assertions)
 └── epics/                      # one file per epic — see AGENTS.md for the convention
+
+fixtures/                       # gitignored, repo root — named sample SolidJS apps evals cases run against
 ```
 
 Nothing here is final — expect this to shift as ordered evolution scenarios make parts of the candidate pipeline load-bearing or unnecessary.
@@ -30,7 +32,7 @@ Nothing here is final — expect this to shift as ordered evolution scenarios ma
 - **`agents`** — single-shot prompt strategies and deterministic response processing. A PO planner and the candidate labels (`solid-state`, `routing`, `component-hierarchy`, `ui-design`, `mock-data`, …, per `PRD.md` §7.3) are introduced only when evolution scenarios demonstrate that the separation improves outcomes. Every strategy builds a prompt from host-selected scope and context, calls `llm-sdk`, strips transport noise such as fences/`<think>` blocks, validates the response schema, and returns it to `host`. No agent here holds a multi-turn conversation or a tool-calling loop.
 - **`store`** — SQLite, one DB per user (in the OS data dir), scoped per project. Tables for raw brain-dumps, generated task records (label, scope, instructions, status, resulting file+range, provenance back to the brain-dump), and retrieval indexes: FTS5 for keyword search, `sqlite-vec` for embeddings (see nocodo's `internal-docs/DECISION_PROVENANCE_GRAPH.md` for the schema/pipeline shape this is modeled on — chunking, `nodes`/`edges`, `llm_cache` to avoid re-processing unchanged input).
 - **`scaffold`** — the deterministic (no LLM) initial project generator: `npm create vite` equivalent wiring for SolidJS + TypeScript, Tailwind + DaisyUI config, Solid Router base setup, and the internal mock-data HTTP proxy skeleton. Every new protopie project starts from this scaffold; generators only ever edit inside it.
-- **`evals`** — experimental infrastructure, not product business logic: checked-in scaffold fixtures, ordered brain-dumps and assertions, prompt versions, live-model traces, deterministic replay inputs, and run reports. Scenario assertions describe application outcomes, preserved behavior, and explicit supersession; they do not require a particular agent topology or editing implementation.
+- **`evals`** — experimental infrastructure, not product business logic: a `record`/`test` CLI plus checked-in recordings (prompt, prompt version, raw LLM response, call metadata, assertions) under `evals/recordings/`. Each recording is a case that names a sample app under the gitignored root-level `fixtures/`. `record` calls the live local model and writes a recording; `test` runs a case's assertions against its stored recording with no network or LLM access. Assertions describe application outcomes and behavior, not which agent or editing mechanism produced them.
 
 ## 3. The candidate generation loop
 

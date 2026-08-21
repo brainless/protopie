@@ -1,7 +1,7 @@
-# Epic 001: Evolution Replay Harness
+# Epic 001: LLM Recording & Assertion Harness
 
 **Status:** Not started
-**Goal:** Build the smallest reproducible harness that can attempt three successive brain-dumps against one SolidJS fixture through a live local LLM, record the complete attempt, and replay the same responses without an LLM.
+**Goal:** Build the foundation for a test suite that records real LLM interactions once and asserts against the stored response many times, proven end to end with a handful of exploratory recordings and at least one recording that has passing assertions against it.
 
 ---
 
@@ -9,13 +9,15 @@
 
 ### Work Context
 
-**Problem:** The architecture in `PRD.md` and `DEVELOP.md` contains several plausible but unproven choices: a PO task planner, concern-specific generators, tree-sitter-based edits, and compiler-error ownership. Testing those pieces separately would establish that each mechanism can work, but not that protopie can evolve one application coherently. Before choosing those mechanisms, the repo needs a repeatable way to expose failures in cumulative generation and compare later strategies against the same requests.
+**Problem:** Every layer of the intended pipeline in `PRD.md` §7 — brain-dump handling, task splitting, task-dependency resolution, per-task code generation — needs its own kind of test, and all of them share the same shape: send something to the LLM once, capture what comes back, then run many cheap, repeatable assertions against that capture instead of hitting the LLM again per assertion or per CI run. Building each layer's tests ad hoc would duplicate that recording/replay machinery N times and leave no common place to keep it consistent. The repo needs the harness itself before it needs the first real test.
 
-**Goal of this epic:** Create one minimal checked-in SolidJS fixture, a three-step ordered evolution scenario, a live runner that calls the local llama.cpp model through `llm-sdk`, and a deterministic replay runner that consumes a recorded raw-response trace. The live and replay runs must reach the same terminal project contents and validation outcomes, including when a response is rejected and the sequence stops early. The first prompt strategy may be deliberately simple; its quality is evidence, not an architectural commitment.
+**Goal of this epic:** Stand up the minimal harness — a gitignored folder of named sample SolidJS apps to test against, and an `evals record` command that takes a prompt straight from the command line, calls a live local LLM, and persists the prompt + raw response as a checked-in recording. Recording must not require pre-authoring anything — the point is to be able to freely try out prompts against the system and have every one of them land in git for later inspection. Assertions are added *after the fact*, as a separate step, by anyone (maintainer or coding agent) reading an already-recorded response — never predefined before a recording exists. Prove the whole loop by recording several exploratory prompts against a sample app, then writing and passing assertions against at least one of them via `evals test`, deterministically and with no LLM reachable.
 
-**What we are NOT deciding:** the final PO contract, generator labels or boundaries, tree-sitter versus another editing mechanism, mock-data proxy design, automatic repair, browser automation, SQLite retrieval, the production crate layout, the `gui`, or a praxis-equivalent vocabulary. This epic does not need to prove that the full protopie thesis works. It only establishes trustworthy experiment machinery and records what the first small sequence does.
+This harness is written and used collaboratively by the maintainer and coding agents working on later epics — so the CLI and file formats must be simple enough for either to record a new prompt, re-record an existing one, or add a new assertion, without needing to touch the harness's own Rust code.
 
-**Output:** A reproducible evaluation harness with one three-step scenario, one recorded live-model trace, deterministic replay coverage, a run report describing pass/fail results, and `epics/002-*.md` scoped from the observed failures. Epic 001 succeeds when the evidence is reproducible, even if the generated application fails one or more scenario assertions.
+**What we are NOT deciding:** the PO contract, generator labels or boundaries, tree-sitter versus another editing mechanism, the task serialization syntax, task-dependency-resolution schema, code-generation file-op schema, mock-data proxy design, automatic repair, browser automation, SQLite retrieval, the production crate layout, or the `gui`. This epic does not implement task splitting, dependency resolution, or code generation as test *subjects* — it only needs to prove the recording/replay mechanism works for one kind of LLM call (a brain-dump-shaped prompt) so the same mechanism can be reused, unchanged, for those subjects in later epics.
+
+**Output:** A working `evals` crate with `record` and `test` subcommands, a gitignored `fixtures/` folder containing at least one named sample SolidJS app, several checked-in recordings under `evals/recordings/` from real ad-hoc prompts, at least one recording with passing assertions, and a documented authoring workflow. `epics/002-*.md` scoped to the next test type (prompt-to-task splitting) from what this epic's recordings actually revealed.
 
 ---
 
@@ -25,32 +27,57 @@
 |---|---|---|
 | **protopie intent** | `PRD.md`, `DEVELOP.md` | Defines the product constraints the harness must preserve without assuming the final implementation. |
 | **nocodo** | `~/Projects/nocodo/agents/DESIGN.md` | RustEngineer's prompt/raw/extracted-output capture is the reference for transparent LLM experiments. |
-| **llm-sdk** | `~/Projects/llm-sdk/` | The live runner calls the local OpenAI-compatible llama.cpp endpoint through this crate. Read `README.md` and `src/` before implementing the adapter. |
-| **rustysolid** | `~/Projects/rustysolid/` | Reference for the smallest credible SolidJS + Vite + TypeScript project fixture. |
+| **llm-sdk** | `~/Projects/llm-sdk/` | The `record` path calls the local OpenAI-compatible llama.cpp endpoint through this crate. Read `README.md` and `src/` before implementing the adapter. |
+| **rustysolid** | `~/Projects/rustysolid/` | Reference for the smallest credible SolidJS + Vite + TypeScript sample app to seed `fixtures/`. |
 
 ---
 
-## Scenario
+## Design
 
-The fixture begins as a minimal running application. The same working directory evolves through these ordered brain-dumps:
+### Where things live
 
-1. Add a Work Items screen with navigation, a heading, and an empty state.
-2. Rename the Work Items concept to Cases, including its route, navigation label, component name, and user-visible copy.
-3. Replace the Cases empty state with a two-pane case workspace while preserving the route and navigation introduced by the prior step.
+```
+fixtures/                     # gitignored (repo root) — named sample SolidJS apps
+  blank/                      #   e.g. a minimal scaffolded app, no brain-dumps applied yet
+  ...                         #   more named apps added over time for other stages/edge cases
 
-Assertions describe observable project outcomes and superseded behavior, not which agent or editing mechanism must be used. Later epics may extend this sequence or add held-out domains; Epic 001 contains only these three steps.
+evals/                        # crate: harness code + checked-in recordings
+  src/                        #   record/test CLI, llm-sdk adapter, assertion runner
+  recordings/                 #   checked in — one folder per recording
+    2026-08-21-add-work-items-screen/
+      prompt.toml             #     fixture name, prompt text, prompt version, model/settings, timestamp
+      response.json           #     raw response + call metadata (latency, token counts when available)
+      assertions.toml         #     optional, added after the fact — absent until someone writes tests for it
+```
+
+`fixtures/` holds real npm projects (`node_modules/`, build output) and is local-only by design — it is not evaluation evidence itself, it's the input state a recording points at by name. `evals/recordings/` holds small text/JSON only and is what makes `evals test` reproducible on a clean clone without a live model.
+
+### Recording format (v0)
+
+A recording is a directory (name chosen at record time, e.g. date-prefixed + a short slug) containing:
+- `prompt.toml` — which fixture it ran against (by name, resolved under `fixtures/`), the exact prompt text, a prompt version string, and the model/settings used,
+- `response.json` — the raw LLM response plus call metadata (latency, token counts when available),
+- `assertions.toml` — absent by default. Recording a prompt never creates this file; it's added later, separately, once someone has actually read the response and decided what should be true of it.
+
+Assertion vocabulary starts minimal: substring/keyword presence and absence. Do not build schema or tool-call assertion machinery speculatively — add it in the epic that first needs it (task-splitting or code-gen recordings), since the shape of a task or a file-op record is explicitly undecided here.
+
+### CLI
+
+- `evals record <name> --fixture <fixture> --prompt "<text>"` (or `--prompt-file <path>` for longer brain-dumps) — the primary, low-friction entry point: writes `prompt.toml` and calls the live local model via `llm-sdk`, writing `response.json`, in one step. No pre-existing files required — this is how you try out any prompt against the system. Fails if `<name>` already has a recording unless `--force` is passed (re-recording after a prompt or model change). Requires a reachable local llama.cpp endpoint; never runs automatically as part of `evals test` or CI.
+- `evals test [<name>]` — for the given recording (or all recordings that have an `assertions.toml`), loads `response.json` and runs the declared assertions, no network or LLM access, exits non-zero on any failure. Recordings without `assertions.toml` are reported as untested, not as errors. This is the command CI and a coding agent run by default.
 
 ---
 
 ## Tasks
 
-- [ ] Define a versioned trace format before building the runner. Each live step records the scenario step, brain-dump, prompt version, model identifier and llama.cpp settings, assembled prompt, raw response, parsed response, proposed file operations, validation results, latency, and token counts when available.
-- [ ] Add one minimal checked-in SolidJS + Vite + TypeScript fixture and document the exact install/build commands. This is an evaluation fixture, not the production `scaffold` crate.
-- [ ] Define the three ordered scenario steps and their assertions, including positive requirements, behavior that must survive from earlier steps, and concepts that must disappear after being superseded.
-- [ ] Implement one intentionally simple, single-shot prompt strategy. It receives only host-selected context, has no tools or filesystem access, and returns a strictly validated set of file operations limited to the fixture directory.
-- [ ] Implement live mode through `llm-sdk` against the local llama.cpp endpoint. Live mode applies each accepted response to the evolving fixture, runs the declared validation commands after every step, and writes the complete trace and run report.
-- [ ] Implement replay mode with no LLM or network access. Replay mode starts from a clean copy of the same fixture, feeds each recorded raw response through the same parser and validator, and performs the same accepted file operations and validations.
-- [ ] Verify that live and replay modes produce the same source-tree hash, excluding dependency/build directories, and the same scenario pass/fail outcomes.
-- [ ] Capture one live attempt of the ordered scenario and its replay, through all three steps or the first response that cannot be applied safely. Do not hide rejected responses or failed assertions; failures are the primary input to the next epic.
-- [ ] Write a short decision report covering only what the run demonstrated about prompt contracts, cumulative change, trace sufficiency, and validation gaps. Avoid selecting PO roles, generator boundaries, or tree-sitter unless the evidence directly requires a decision.
-- [ ] Write `epics/002-*.md` around the smallest observed failure or missing capability that prevents the scenario from becoming more representative.
+- [ ] Add `fixtures/` to `.gitignore` at the repo root; document (in `evals/README.md` or `DEVELOP.md`) how a named fixture app is created — for now, a documented manual `npm create vite` + Tailwind/DaisyUI setup is fine; do not build the `scaffold` crate to unblock this epic.
+- [ ] Add one fixture (`fixtures/blank/`) — a minimal running SolidJS + Vite + TypeScript app with no brain-dumps applied.
+- [ ] Create the `evals` crate skeleton in the workspace with `record` and `test` subcommands (clap or similar), wired into the workspace `Cargo.toml`.
+- [ ] Define the v0 recording format (`prompt.toml` / `response.json` / optional `assertions.toml`) exactly as described above.
+- [ ] Implement the `record` path: `evals record <name> --fixture <fixture> --prompt "..."` writes `prompt.toml`, calls `llm-sdk` against the local llama.cpp endpoint, and writes `response.json` with model id/settings/prompt version/latency/token counts (when available) — no other file required beforehand.
+- [ ] Implement the `test` path: for a recording with `assertions.toml`, load `response.json` and run its declared keyword/content assertions, report pass/fail per assertion, no network or LLM call; recordings without `assertions.toml` report as untested rather than erroring.
+- [ ] Use `evals record` to actually try out a handful of real prompts against `fixtures/blank/` (an initial brain-dump, and at least one or two variants/edge cases) and check the recordings into git as-is.
+- [ ] Pick one recording and write its first `assertions.toml` by hand, from reading the recorded response — this is the "test against stored response" step, done after the recording exists, not before.
+- [ ] Verify `evals test` passes repeatably from the checked-in recording alone (no model reachable) and fails clearly when an assertion is violated.
+- [ ] Document the record/re-record/add-assertions workflow so both the maintainer and a coding agent can do all three without reading the `evals` crate's source first.
+- [ ] Write `epics/002-*.md` scoped to the next test type from the map in this epic's Introduction (prompt-to-task splitting is the natural next one, since it's the next layer PRD §7.2 depends on) — informed by whatever this epic's recordings actually revealed about the format, not by re-deciding the PO or task-schema questions this epic deferred.
