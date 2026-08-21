@@ -1,0 +1,7 @@
+name = "layout-fresh-project"
+fixture = "blank"
+prompt_version = "v0"
+prompt = "I want a one-pager SaaS layout with left side navigation, a fixed top-navigation. User profile CTA on top navigation, right side. Keep left side navigation empty. And an empty main column. Use Tailwind classes. Create HTML only, link to TailwindCSS from any CDN."
+model = "local"
+base_url = "http://localhost:8080"
+recorded_at = "2026-08-21T10:29:41.031541+00:00"

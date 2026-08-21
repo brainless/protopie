@@ -1,6 +1,6 @@
 # Epic 001: LLM Recording & Assertion Harness
 
-**Status:** Not started
+**Status:** Done
 **Goal:** Build the foundation for a test suite that records real LLM interactions once and asserts against the stored response many times, proven end to end with a handful of exploratory recordings and at least one recording that has passing assertions against it.
 
 ---
@@ -70,14 +70,14 @@ Assertion vocabulary starts minimal: substring/keyword presence and absence. Do 
 
 ## Tasks
 
-- [ ] Add `fixtures/` to `.gitignore` at the repo root; document (in `evals/README.md` or `DEVELOP.md`) how a named fixture app is created — for now, a documented manual `npm create vite` + Tailwind/DaisyUI setup is fine; do not build the `scaffold` crate to unblock this epic.
-- [ ] Add one fixture (`fixtures/blank/`) — a minimal running SolidJS + Vite + TypeScript app with no brain-dumps applied.
-- [ ] Create the `evals` crate skeleton in the workspace with `record` and `test` subcommands (clap or similar), wired into the workspace `Cargo.toml`.
-- [ ] Define the v0 recording format (`prompt.toml` / `response.json` / optional `assertions.toml`) exactly as described above.
-- [ ] Implement the `record` path: `evals record <name> --fixture <fixture> --prompt "..."` writes `prompt.toml`, calls `llm-sdk` against the local llama.cpp endpoint, and writes `response.json` with model id/settings/prompt version/latency/token counts (when available) — no other file required beforehand.
-- [ ] Implement the `test` path: for a recording with `assertions.toml`, load `response.json` and run its declared keyword/content assertions, report pass/fail per assertion, no network or LLM call; recordings without `assertions.toml` report as untested rather than erroring.
-- [ ] Use `evals record` to actually try out a handful of real prompts against `fixtures/blank/` (an initial brain-dump, and at least one or two variants/edge cases) and check the recordings into git as-is.
-- [ ] Pick one recording and write its first `assertions.toml` by hand, from reading the recorded response — this is the "test against stored response" step, done after the recording exists, not before.
-- [ ] Verify `evals test` passes repeatably from the checked-in recording alone (no model reachable) and fails clearly when an assertion is violated.
-- [ ] Document the record/re-record/add-assertions workflow so both the maintainer and a coding agent can do all three without reading the `evals` crate's source first.
-- [ ] Write `epics/002-*.md` scoped to the next test type from the map in this epic's Introduction (prompt-to-task splitting is the natural next one, since it's the next layer PRD §7.2 depends on) — informed by whatever this epic's recordings actually revealed about the format, not by re-deciding the PO or task-schema questions this epic deferred.
+- [x] Add `fixtures/` to `.gitignore` at the repo root; document (in `evals/README.md` or `DEVELOP.md`) how a named fixture app is created — for now, a documented manual `npm create vite` + Tailwind/DaisyUI setup is fine; do not build the `scaffold` crate to unblock this epic.
+- [x] Add one fixture (`fixtures/blank/`) — a minimal running SolidJS + Vite + TypeScript app with no brain-dumps applied.
+- [x] Create the `evals` crate skeleton in the workspace with `record` and `test` subcommands (clap or similar), wired into the workspace `Cargo.toml`.
+- [x] Define the v0 recording format (`prompt.toml` / `response.json` / optional `assertions.toml`) exactly as described above.
+- [x] Implement the `record` path: `evals record <name> --fixture <fixture> --prompt "..."` writes `prompt.toml`, calls `llm-sdk` against the local llama.cpp endpoint, and writes `response.json` with model id/settings/prompt version/latency/token counts (when available) — no other file required beforehand.
+- [x] Implement the `test` path: for a recording with `assertions.toml`, load `response.json` and run its declared keyword/content assertions, report pass/fail per assertion, no network or LLM call; recordings without `assertions.toml` report as untested rather than erroring.
+- [x] Use `evals record` to actually try out a handful of real prompts against `fixtures/blank/` (an initial brain-dump, and at least one or two variants/edge cases) and check the recordings into git as-is — `top-navigation`, `layout-fresh-project`, `one-pager-saas-fresh-project`.
+- [x] Pick one recording and write its first `assertions.toml` by hand, from reading the recorded response — this is the "test against stored response" step, done after the recording exists, not before.
+- [x] Verify `evals test` passes repeatably from the checked-in recording alone (no model reachable) and fails clearly when an assertion is violated.
+- [x] Document the record/re-record/add-assertions workflow so both the maintainer and a coding agent can do all three without reading the `evals` crate's source first.
+- [x] Write `epics/002-*.md` scoped to the next test type from the map in this epic's Introduction (prompt-to-task splitting is the natural next one, since it's the next layer PRD §7.2 depends on) — informed by whatever this epic's recordings actually revealed about the format, not by re-deciding the PO or task-schema questions this epic deferred.

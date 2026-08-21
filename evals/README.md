@@ -37,8 +37,23 @@ Both are checked into git as-is; that's the point — every prompt you try lands
 
 ## Adding assertions
 
-Not automated yet. By hand, after reading a recorded `response.json`, add `assertions.toml` next to it (vocabulary starts minimal: substring/keyword presence and absence — see the epic for the exact shape once `evals test` implements it).
+By hand, after reading a recorded `response.json`, add `assertions.toml` next to it. The vocabulary is minimal — substring presence and absence, checked against the response's message content:
+
+```toml
+contains = ["navbar", "nav-links"]
+not_contains = ["createSignal"]
+```
+
+Both keys are optional and default to an empty list.
 
 ## Running assertions
 
-`evals test [<name>]` is **not implemented yet** (see `epics/001-evolution-replay-harness.md` task list). It will load a recording's `response.json` and run its `assertions.toml` with no network or LLM access; recordings without `assertions.toml` will report as untested rather than erroring.
+```
+cargo run -p evals -- test [<name>]
+```
+
+- With a `<name>`, runs just that recording's `assertions.toml`.
+- With no `<name>`, runs every recording under `evals/recordings/` that has an `assertions.toml`.
+- Loads `response.json` directly — no network or LLM access.
+- Recordings without `assertions.toml` are reported as untested, not as errors.
+- Exits non-zero if any assertion fails (or if a named recording doesn't exist); exits 0 otherwise, including when nothing had assertions to run.

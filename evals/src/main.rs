@@ -1,4 +1,5 @@
 mod record;
+mod test;
 
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
@@ -14,7 +15,7 @@ struct Cli {
 enum Command {
     /// Send a prompt to a live local LLM and store the prompt + raw response.
     Record(RecordArgs),
-    /// Run assertions against a stored recording (not implemented yet).
+    /// Run assertions against a stored recording (no network or LLM access).
     Test(TestArgs),
 }
 
@@ -69,10 +70,6 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Record(args) => record::run(args).await,
-        Command::Test(_) => {
-            anyhow::bail!(
-                "`evals test` is not implemented yet — this is the next task in epics/001-evolution-replay-harness.md"
-            )
-        }
+        Command::Test(args) => test::run(args),
     }
 }

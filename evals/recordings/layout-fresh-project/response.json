@@ -1,0 +1,24 @@
+{
+  "latency_ms": 127712,
+  "response": {
+    "id": "chatcmpl-6hR01uouMDwa18Pt7tkgotOtPQ0l838T",
+    "object": "chat.completion",
+    "created": 1787308181,
+    "model": "/Users/brainless/hf_models/models--unsloth--Qwen3.5-9B-GGUF/snapshots/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-UD-Q4_K_XL.gguf",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "```html\n<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>SaaS Layout</title>\n    <script src=\"https://cdn.tailwindcss.com\"></script>\n</head>\n<body class=\"bg-gray-50 text-slate-800 font-sans antialiased\">\n\n    <!-- \n      FIXED TOP NAVIGATION \n      z-50 ensures it sits on top of the sidebar and content.\n      h-16 (64px) is the standard height.\n    -->\n    <nav class=\"fixed top-0 left-0 right-0 h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 z-50 shadow-sm\">\n        <!-- Logo Area (Left) -->\n        <div class=\"flex items-center gap-2\">\n            <div class=\"w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-lg\">S</div>\n            <span class=\"font-bold text-xl tracking-tight text-slate-900\">SaaSify</span>\n        </div>\n\n        <!-- Middle Navigation Links (Optional visual filler) -->\n        <div class=\"hidden md:flex items-center gap-8\">\n            <a href=\"#\" class=\"text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors\">Dashboard</a>\n            <a href=\"#\" class=\"text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors\">Projects</a>\n            <a href=\"#\" class=\"text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors\">Analytics</a>\n        </div>\n\n        <!-- User Profile CTA (Right) -->\n        <div class=\"flex items-center gap-4\">\n            <button class=\"text-sm font-medium text-slate-500 hover:text-slate-900\">\n                Settings\n            </button>\n            <!-- Profile Button -->\n            <button class=\"bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-full text-sm font-semibold shadow-sm transition-all flex items-center gap-2\">\n                <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2\"/><circle cx=\"12\" cy=\"7\" r=\"4\"/></svg>\n                My Profile\n            </button>\n        </div>\n    </nav>\n\n    <!-- \n      MAIN LAYOUT CONTAINER\n      Uses flexbox to split the screen.\n      pt-16 adds padding to the top to prevent content hiding behind the fixed header.\n    -->\n    <div class=\"flex h-screen pt-16\">\n        \n        <!-- \n          LEFT SIDEBAR \n          Fixed width (w-64), Full height (h-screen).\n          Requested to be empty.\n        -->\n        <aside class=\"w-64 bg-white border-r border-gray-200 flex flex-col h-full hidden md:flex\">\n            <!-- Empty Sidebar -->\n        </aside>\n\n        <!-- \n          MAIN COLUMN \n          Takes remaining space (flex-1), full height (h-screen).\n        -->\n        <main class=\"flex-1 overflow-y-auto bg-gray-50 p-10\">\n            <!-- Empty Main Content Area -->\n            <div class=\"h-full flex flex-col items-center justify-center text-slate-400\">\n                <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"48\" height=\"48\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"mb-4 opacity-50\"><rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\" ry=\"2\"/><line x1=\"9\" x2=\"9\" y1=\"3\" y2=\"21\"/></svg>\n                <p>Main Content Area</p>\n            </div>\n        </main>\n\n    </div>\n\n</body>\n</html>\n```"
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 70,
+      "completion_tokens": 1991,
+      "total_tokens": 2061
+    }
+  }
+}

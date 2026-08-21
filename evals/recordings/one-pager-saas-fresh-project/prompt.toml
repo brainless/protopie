@@ -1,0 +1,7 @@
+name = "one-pager-saas-fresh-project"
+fixture = "blank"
+prompt_version = "v0"
+prompt = "Create one-pager SaaS HTML with hero section. Then 3 featured Card UI. No sidebar or top navigation. A few full-width image placeholders after featured boxes. Then footer - no links. Use Tailwind classes. Create HTML only, link to TailwindCSS from any CDN."
+model = "local"
+base_url = "http://localhost:8080"
+recorded_at = "2026-08-21T10:36:52.480486+00:00"
