@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/protopie-api",
+    "crates/protopie-server",
+    "crates/protopie-gui",
+    "crates/protopie-ui-agent",
+]
+
+[workspace.dependencies]
+protopie-api = { path = "crates/protopie-api" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+akar-core = { git = "https://github.com/brainless/akar" }
+akar-layout = { git = "https://github.com/brainless/akar" }
+akar-components = { git = "https://github.com/brainless/akar" }
+akar-winit = { git = "https://github.com/brainless/akar" }

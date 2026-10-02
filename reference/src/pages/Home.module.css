@@ -1,0 +1,32 @@
+.hero {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 2rem 1rem;
+  text-align: center;
+  background: radial-gradient(circle at 30% 20%, #dbe7ff, transparent 55%),
+    radial-gradient(circle at 80% 80%, #ffe3f1, transparent 50%), #f8f9ff;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: clamp(3rem, 12vw, 7rem);
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  background: linear-gradient(120deg, #2c4f7c, #6d4cff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.subtitle {
+  margin: 0;
+  font-size: clamp(1rem, 2.5vw, 1.35rem);
+  font-weight: 500;
+  color: #55557a;
+}

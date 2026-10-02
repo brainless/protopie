@@ -1,0 +1,11 @@
+[package]
+name = "protopie-ui-agent"
+version = "0.1.0"
+edition = "2021"
+description = "Agent that builds TypeScript + SolidJS UI prototypes"
+
+[dependencies]
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

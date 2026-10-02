@@ -1,0 +1,8 @@
+[package]
+name = "protopie-api"
+version = "0.1.0"
+edition = "2021"
+description = "Wire types shared by the protopie server and its clients"
+
+[dependencies]
+serde = { workspace = true }

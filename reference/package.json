@@ -1,0 +1,21 @@
+{
+  "name": "hello-world",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@solidjs/router": "^2.0.0-next.34",
+    "@solidjs/web": "^2.0.0-rc.13",
+    "solid-js": "^2.0.0-rc.13"
+  },
+  "devDependencies": {
+    "@solidjs/vite-plugin": "^3.0.0-next.35",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.2"
+  }
+}

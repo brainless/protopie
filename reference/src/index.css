@@ -1,0 +1,18 @@
+:root {
+  --font-heading: "Poppins", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  color: #1b1b2f;
+  background: #fff;
+  -webkit-font-smoothing: antialiased;
+}
