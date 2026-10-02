@@ -9,6 +9,8 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+pub mod parser;
+
 /// Directory names never copied from the template.
 const SKIP: &[&str] = &["node_modules", "dist", ".git", "target", ".DS_Store"];
 
