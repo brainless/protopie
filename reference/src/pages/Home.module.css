@@ -1,3 +1,4 @@
+/* protopie:begin hero_1 */
 .hero {
   min-height: 100vh;
   display: flex;
@@ -10,6 +11,7 @@
   background: radial-gradient(circle at 30% 20%, #dbe7ff, transparent 55%),
     radial-gradient(circle at 80% 80%, #ffe3f1, transparent 50%), #f8f9ff;
 }
+/* protopie:end hero_1 */
 
 .title {
   margin: 0;

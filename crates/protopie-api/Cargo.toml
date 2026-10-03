@@ -6,3 +6,6 @@ description = "Wire types shared by the protopie server and its clients"
 
 [dependencies]
 serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

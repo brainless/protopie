@@ -7,9 +7,10 @@ use axum::{
     Json, Router,
 };
 use protopie_api::{
-    ChatRequest, ChatResponse, CreateProjectRequest, CreateProjectResponse, ErrorResponse,
-    ListProjectsResponse, ModifyProjectRequest, ModifyProjectResponse, ProjectInfo, CHAT_PATH,
-    HEALTH_PATH, PROJECTS_MODIFY_PATH, PROJECTS_PATH,
+    AbortProjectRequest, AbortProjectResponse, ChatRequest, ChatResponse, CreateProjectRequest,
+    CreateProjectResponse, ErrorResponse, ListProjectsResponse, ModifyOutcome,
+    ModifyProjectRequest, ModifyProjectResponse, ProjectInfo, QuestionSummary, CHAT_PATH,
+    HEALTH_PATH, PROJECTS_ABORT_PATH, PROJECTS_MODIFY_PATH, PROJECTS_PATH,
 };
 use protopie_ui_agent as agent;
 
@@ -22,10 +23,17 @@ struct ApiError(StatusCode, String);
 impl From<agent::Error> for ApiError {
     fn from(e: agent::Error) -> Self {
         let status = match &e {
-            agent::Error::InvalidSlug(_) | agent::Error::Escape(_) => StatusCode::BAD_REQUEST,
-            agent::Error::AlreadyExists(_) => StatusCode::CONFLICT,
+            agent::Error::InvalidSlug(_)
+            | agent::Error::Escape(_)
+            | agent::Error::InvalidConversationId(_) => StatusCode::BAD_REQUEST,
+            agent::Error::AlreadyExists(_)
+            | agent::Error::AlreadyInitialized(_)
+            | agent::Error::StaleRevision { .. } => StatusCode::CONFLICT,
+            agent::Error::UnsupportedProject(_) => StatusCode::UNPROCESSABLE_ENTITY,
             agent::Error::NotADirectory(_) => StatusCode::NOT_FOUND,
-            agent::Error::Io { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            agent::Error::Io { .. } | agent::Error::Metadata { .. } => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
         ApiError(status, e.to_string())
     }
@@ -43,7 +51,10 @@ async fn blocking<T: Send + 'static>(
 ) -> Result<T, ApiError> {
     match tokio::task::spawn_blocking(f).await {
         Ok(r) => r.map_err(ApiError::from),
-        Err(e) => Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("task failed: {e}"))),
+        Err(e) => Err(ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("task failed: {e}"),
+        )),
     }
 }
 
@@ -62,7 +73,10 @@ async fn list_projects() -> Result<Json<ListProjectsResponse>, ApiError> {
         let abs = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
         Ok(agent::list_projects(root)?
             .into_iter()
-            .map(|name| ProjectInfo { path: path_string(&abs.join(&name)), name })
+            .map(|name| ProjectInfo {
+                path: path_string(&abs.join(&name)),
+                name,
+            })
             .collect())
     })
     .await?;
@@ -76,15 +90,114 @@ async fn create_project(
     let base = PathBuf::from(req.base_path);
     let s = slug.clone();
     let path = blocking(move || agent::init_named(&base, &s)).await?;
-    Ok((StatusCode::CREATED, Json(CreateProjectResponse { slug, path: path_string(&path) })))
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateProjectResponse {
+            slug,
+            path: path_string(&path),
+        }),
+    ))
 }
 
 async fn modify_project(
     Json(req): Json<ModifyProjectRequest>,
 ) -> Result<Json<ModifyProjectResponse>, ApiError> {
-    let reply =
-        blocking(move || agent::modify(Path::new(&req.project_path), &req.command)).await?;
-    Ok(Json(ModifyProjectResponse { reply }))
+    let result = blocking(move || {
+        agent::modify_with(
+            Path::new(&req.project_path),
+            &req.command,
+            &agent::ModifyOptions {
+                conversation_id: req.conversation_id.as_deref(),
+                request_id: req.request_id.as_deref(),
+                dry_run: req.dry_run,
+            },
+        )
+    })
+    .await?;
+    Ok(Json(ModifyProjectResponse {
+        reply: result.summary,
+        outcome: Some(to_wire(result.outcome)),
+    }))
+}
+
+async fn abort_project(
+    Json(req): Json<AbortProjectRequest>,
+) -> Result<Json<AbortProjectResponse>, ApiError> {
+    let path = PathBuf::from(req.project_path);
+    let result = blocking(move || {
+        if !path.is_dir() {
+            return Err(agent::Error::NotADirectory(path));
+        }
+        agent::apply::abort_interrupted_apply(&path)
+    })
+    .await?;
+    let response = match result {
+        agent::apply::RecoverOutcome::Aborted {
+            plan_id,
+            preserved_paths,
+        } => AbortProjectResponse::Aborted {
+            plan_id,
+            preserved_paths,
+        },
+        agent::apply::RecoverOutcome::NothingToDo => AbortProjectResponse::NothingToDo,
+        agent::apply::RecoverOutcome::Conflict { reason } => {
+            AbortProjectResponse::Conflict { reason }
+        }
+        agent::apply::RecoverOutcome::RolledForward { .. } => {
+            return Err(ApiError(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "unexpected recovery result during abort".into(),
+            ));
+        }
+    };
+    Ok(Json(response))
+}
+
+fn question_summaries(questions: Vec<agent::contracts::Question>) -> Vec<QuestionSummary> {
+    questions
+        .into_iter()
+        .map(|q| QuestionSummary {
+            blocking: q.kind == agent::contracts::QuestionKind::BlockingClarification,
+            id: q.id,
+            prompt: q.prompt,
+            options: q.options.into_iter().map(|o| o.label).collect(),
+        })
+        .collect()
+}
+
+fn to_wire(outcome: agent::contracts::ModifyOutcome) -> ModifyOutcome {
+    use agent::contracts::ModifyOutcome as O;
+    match outcome {
+        O::Preview {
+            plan_id,
+            changed_files,
+            follow_up,
+        } => ModifyOutcome::Preview {
+            plan_id,
+            changed_files,
+            questions: question_summaries(follow_up),
+        },
+        O::Applied {
+            plan_id,
+            changed_files,
+            follow_up,
+        } => ModifyOutcome::Applied {
+            plan_id,
+            changed_files,
+            questions: question_summaries(follow_up),
+        },
+        O::NeedsClarification { questions } => ModifyOutcome::NeedsClarification {
+            questions: question_summaries(questions),
+        },
+        O::NoChange { reason, follow_up } => ModifyOutcome::NoChange {
+            reason,
+            questions: question_summaries(follow_up),
+        },
+        O::Unsupported { rejection } => ModifyOutcome::Unsupported {
+            explanation: rejection.explanation,
+        },
+        O::Conflict { reason } => ModifyOutcome::Conflict { reason },
+    }
 }
 
 fn app() -> Router {
@@ -93,6 +206,7 @@ fn app() -> Router {
         .route(HEALTH_PATH, get(|| async { "ok" }))
         .route(PROJECTS_PATH, get(list_projects).post(create_project))
         .route(PROJECTS_MODIFY_PATH, post(modify_project))
+        .route(PROJECTS_ABORT_PATH, post(abort_project))
 }
 
 #[tokio::main]
@@ -130,7 +244,11 @@ mod tests {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
-    async fn call(method: &str, uri: &str, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        method: &str,
+        uri: &str,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
         let req = Request::builder()
             .method(method)
             .uri(uri)
@@ -140,7 +258,10 @@ mod tests {
         let resp = app().oneshot(req).await.unwrap();
         let status = resp.status();
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-        (status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        )
     }
 
     #[tokio::test]
@@ -148,22 +269,146 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path().join("projects").to_string_lossy().into_owned();
 
-        let (st, body) = call("POST", "/projects", serde_json::json!({"base_path": base, "name": "My App"})).await;
+        let (st, body) = call(
+            "POST",
+            "/projects",
+            serde_json::json!({"base_path": base, "name": "My App"}),
+        )
+        .await;
         assert_eq!(st, StatusCode::CREATED);
         assert_eq!(body["slug"], "my-app");
         let path = body["path"].as_str().unwrap().to_string();
 
-        let (st, _) = call("POST", "/projects", serde_json::json!({"base_path": base, "name": "my app"})).await;
+        let (st, _) = call(
+            "POST",
+            "/projects",
+            serde_json::json!({"base_path": base, "name": "my app"}),
+        )
+        .await;
         assert_eq!(st, StatusCode::CONFLICT);
-        let (st, body) = call("POST", "/projects", serde_json::json!({"base_path": base, "name": "!!!"})).await;
+        let (st, body) = call(
+            "POST",
+            "/projects",
+            serde_json::json!({"base_path": base, "name": "!!!"}),
+        )
+        .await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
         assert!(body["error"].is_string());
 
-        let (st, body) = call("POST", "/projects/modify", serde_json::json!({"project_path": path, "command": "Add top header"})).await;
+        let (st, body) = call(
+            "POST",
+            "/projects/modify",
+            serde_json::json!({"project_path": path, "command": "Add top header"}),
+        )
+        .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(body["reply"], "received: Add top header");
-        let (st, _) = call("POST", "/projects/modify", serde_json::json!({"project_path": "/nonexistent/x", "command": "x"})).await;
+        assert_eq!(body["outcome"]["kind"], "unsupported");
+        let (st, body) = call(
+            "POST",
+            "/projects/modify",
+            serde_json::json!({"project_path": path, "command": "Add navigation to top nav"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(body["outcome"]["kind"], "needs_clarification");
+        assert_eq!(body["outcome"]["questions"][0]["blocking"], true);
+        let (st, _) = call(
+            "POST",
+            "/projects/modify",
+            serde_json::json!({"project_path": "/nonexistent/x", "command": "x"}),
+        )
+        .await;
         assert_eq!(st, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn navigation_flow_uses_conversation_and_request_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("projects").to_string_lossy().into_owned();
+        let (_, body) = call(
+            "POST",
+            "/projects",
+            serde_json::json!({"base_path": base, "name": "nav"}),
+        )
+        .await;
+        let path = body["path"].as_str().unwrap().to_string();
+        let modify = |command: &str, request_id: &str, extra: serde_json::Value| {
+            let mut body = serde_json::json!({
+                "project_path": path, "command": command,
+                "conversation_id": "chat-1", "request_id": request_id,
+            });
+            body.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            body
+        };
+
+        let (st, body) = call(
+            "POST",
+            "/projects/modify",
+            modify(
+                "Need a top navigation",
+                "r1",
+                serde_json::json!({"dry_run": true}),
+            ),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(body["outcome"]["kind"], "preview");
+        assert!(!std::path::Path::new(&path).join("src/components").exists());
+
+        let (_, body) = call(
+            "POST",
+            "/projects/modify",
+            modify("Need a top navigation", "r1", serde_json::json!({})),
+        )
+        .await;
+        assert_eq!(body["outcome"]["kind"], "applied");
+        let (_, body) = call(
+            "POST",
+            "/projects/modify",
+            modify("Add Contact Us", "r2", serde_json::json!({})),
+        )
+        .await;
+        assert_eq!(body["outcome"]["kind"], "applied");
+        assert_eq!(body["outcome"]["questions"][0]["blocking"], false);
+        assert!(body["outcome"]["questions"][0]["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("Contact Us"));
+
+        // A transport retry replays; a deliberate repeat (new id) adds nothing.
+        let nav = || {
+            std::fs::read_to_string(std::path::Path::new(&path).join("src/components/TopNav.tsx"))
+                .unwrap()
+        };
+        let once = nav();
+        let (_, body) = call(
+            "POST",
+            "/projects/modify",
+            modify("Add Contact Us", "r2", serde_json::json!({})),
+        )
+        .await;
+        assert_eq!(body["outcome"]["kind"], "applied");
+        assert!(body["reply"].as_str().unwrap().contains("already applied"));
+        assert_eq!(nav(), once);
+        let (_, body) = call(
+            "POST",
+            "/projects/modify",
+            modify("Need a top navigation", "r3", serde_json::json!({})),
+        )
+        .await;
+        assert_eq!(body["outcome"]["kind"], "no_change");
+        assert_eq!(nav(), once);
+
+        let (st, _) = call(
+            "POST",
+            "/projects/modify",
+            serde_json::json!({"project_path": path, "command": "x", "conversation_id": "../x"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -171,5 +416,91 @@ mod tests {
         let (st, body) = call("POST", "/chat", serde_json::json!({"prompt": "hi"})).await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(body["reply"], "hi");
+    }
+
+    #[tokio::test]
+    async fn abort_endpoint_preserves_external_edit_and_reports_result() {
+        use agent::apply::{apply_plan, ApplyOptions};
+        use agent::contracts::PlanOutcome;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = agent::init_named(tmp.path(), "recovery").unwrap();
+        let project = match agent::project::load_project(&dir).unwrap() {
+            agent::project::ProjectState::Loaded(project) => project,
+            _ => panic!("new project has no model"),
+        };
+        let session = agent::project::load_session(&dir, "default").unwrap();
+        let plan = match agent::pipeline::plan_prompt("Add top nav", &project, &session) {
+            PlanOutcome::Ready { plan } => plan,
+            other => panic!("{other:?}"),
+        };
+        let options = ApplyOptions {
+            fail_after_writes: Some(1),
+            ..Default::default()
+        };
+        assert!(apply_plan(&dir, "default", &plan, &options).is_err());
+        let app_path = dir.join("src/App.tsx");
+        let external = format!(
+            "// external edit\n{}",
+            std::fs::read_to_string(&app_path).unwrap()
+        );
+        std::fs::write(&app_path, &external).unwrap();
+
+        let body = serde_json::json!({ "project_path": dir });
+        let (status, response) = call("POST", PROJECTS_ABORT_PATH, body.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(response["kind"], "aborted");
+        assert_eq!(
+            response["preserved_paths"],
+            serde_json::json!(["src/App.tsx"])
+        );
+        assert_eq!(std::fs::read_to_string(&app_path).unwrap(), external);
+        assert!(!dir.join("src/components/TopNav.tsx").exists());
+        let (status, response) = call("POST", PROJECTS_ABORT_PATH, body).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(response["kind"], "nothing_to_do");
+    }
+
+    #[tokio::test]
+    async fn abort_endpoint_reports_owned_region_conflict() {
+        use agent::apply::{apply_plan, ApplyOptions};
+        use agent::contracts::PlanOutcome;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = agent::init_named(tmp.path(), "conflict").unwrap();
+        let project = match agent::project::load_project(&dir).unwrap() {
+            agent::project::ProjectState::Loaded(project) => project,
+            _ => panic!("new project has no model"),
+        };
+        let session = agent::project::load_session(&dir, "default").unwrap();
+        let plan = match agent::pipeline::plan_prompt("Add top nav", &project, &session) {
+            PlanOutcome::Ready { plan } => plan,
+            other => panic!("{other:?}"),
+        };
+        let options = ApplyOptions {
+            fail_after_writes: Some(3),
+            ..Default::default()
+        };
+        assert!(apply_plan(&dir, "default", &plan, &options).is_err());
+        let app_path = dir.join("src/App.tsx");
+        let edited = std::fs::read_to_string(&app_path)
+            .unwrap()
+            .replace("<TopNav />", "<UserNav />");
+        std::fs::write(&app_path, &edited).unwrap();
+
+        let (status, response) = call(
+            "POST",
+            PROJECTS_ABORT_PATH,
+            serde_json::json!({ "project_path": dir }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(response["kind"], "conflict");
+        assert!(response["reason"]
+            .as_str()
+            .unwrap()
+            .contains("owned layout-top region"));
+        assert_eq!(std::fs::read_to_string(&app_path).unwrap(), edited);
+        assert!(dir.join(".protopie/journal.json").exists());
     }
 }

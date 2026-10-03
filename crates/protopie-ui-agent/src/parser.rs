@@ -1,20 +1,22 @@
 //! Pure syntax parsing for bounded UI requests.
 
+use serde::{Deserialize, Serialize};
+
 /// Half-open UTF-8 byte range into the original prompt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ParseOutcome {
     Parsed(Request),
     NeedsClarification(Clarification),
     Unsupported(Unsupported),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Request {
     CreateNavigation(NavigationCreation),
     AddLabelledItem(LabelledAddition),
@@ -22,7 +24,7 @@ pub enum Request {
     Style(StyleRequest),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StyleRequest {
     pub selector: RoleSelector,
     pub change: StyleChange,
@@ -30,7 +32,7 @@ pub struct StyleRequest {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoleSelector {
     pub role: ElementRole,
     /// Optional syntactic constraint, not a resolved project element.
@@ -39,7 +41,7 @@ pub struct RoleSelector {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SelectorRelation {
     Below {
         anchor: Box<RoleSelector>,
@@ -47,34 +49,34 @@ pub enum SelectorRelation {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ElementRole {
     Image,
     Form,
     Hero,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StyleChange {
     RoundedCorners,
     FullWidth,
     Padding(PaddingChange),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PaddingChange {
     Increase,
     Decrease,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PageCreation {
     pub label: Label,
     /// Complete meaningful command, excluding surrounding whitespace.
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LabelledAddition {
     pub label: Label,
     /// None preserves the omitted container for a future resolver.
@@ -83,49 +85,49 @@ pub struct LabelledAddition {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Label {
     pub text: String,
     /// Interior label text in the original prompt; no surrounding whitespace.
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ContainerTarget {
     TopNavigation { span: Span },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NavigationCreation {
     pub position: NavigationPosition,
     /// Span of the complete recognized command, excluding surrounding whitespace.
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NavigationPosition {
     Top,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Clarification {
     pub reason: ClarificationReason,
     pub span: Span,
     pub quoted_form_suggestion: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClarificationReason {
     AmbiguousLabelBoundary,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Unsupported {
     pub reason: UnsupportedReason,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnsupportedReason {
     EmptyInput,
     UnrecognizedInput,
@@ -316,6 +318,17 @@ fn parse_page_creation(input: &str, tokens: &[Token<'_>], span: Span) -> Option<
         })));
     }
 
+    // Punctuation on the final page noun, or a plural `pages`, is malformed page
+    // syntax, not a label. Applies even when no label precedes the noun.
+    let last = tokens.last().unwrap();
+    let stem = last
+        .text
+        .trim_end_matches(|c: char| c.is_ascii_punctuation());
+    if (stem.eq_ignore_ascii_case("page") && last.text.len() != stem.len())
+        || stem.eq_ignore_ascii_case("pages")
+    {
+        return Some(unsupported(UnsupportedReason::UnrecognizedInput, span));
+    }
     // A final page noun distinguishes this form from a general labelled addition.
     let page_index = if token_matches(tokens.last().unwrap(), "page", false) {
         Some(tokens.len() - 1)
@@ -1246,6 +1259,56 @@ mod tests {
                     reason: UnsupportedReason::UnsupportedTail,
                     span: Span {
                         start,
+                        end: input.len()
+                    },
+                }),
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn page_creation_rejects_punctuation_on_page_noun() {
+        for input in [
+            "Add a Contact Us page.",
+            "Add a Contact Us page,",
+            "Add a Contact Us page!",
+        ] {
+            assert_eq!(
+                parse(input),
+                ParseOutcome::Unsupported(Unsupported {
+                    reason: UnsupportedReason::UnrecognizedInput,
+                    span: Span { start: 0, end: 22 },
+                }),
+                "{input:?}"
+            );
+        }
+        assert!(matches!(
+            parse("Add a Contact Us page"),
+            ParseOutcome::Parsed(Request::CreatePage(_))
+        ));
+        assert!(matches!(
+            parse("Add Contact Us"),
+            ParseOutcome::Parsed(Request::AddLabelledItem(_))
+        ));
+    }
+
+    #[test]
+    fn page_creation_rejects_repeated_punctuation_missing_labels_and_plural_noun() {
+        for input in [
+            "Add a Contact Us page..",
+            "Add a Contact Us page!?",
+            "Add a page.",
+            "Add a Page.",
+            "Add a Contact Us pages.",
+            "Add a Contact Us pages",
+        ] {
+            assert_eq!(
+                parse(input),
+                ParseOutcome::Unsupported(Unsupported {
+                    reason: UnsupportedReason::UnrecognizedInput,
+                    span: Span {
+                        start: 0,
                         end: input.len()
                     },
                 }),

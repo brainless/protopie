@@ -127,7 +127,10 @@ impl ChatView {
         let mut layout = Layout::new();
         let project_btn = layout.new_leaf(Style {
             flex_grow: 1.0,
-            size: Size { width: Dimension::auto(), height: length(BTN_H) },
+            size: Size {
+                width: Dimension::auto(),
+                height: length(BTN_H),
+            },
             ..Default::default()
         });
         let header = layout.new_with_children(
@@ -135,7 +138,10 @@ impl ChatView {
                 display: Display::Flex,
                 flex_direction: FlexDirection::Row,
                 align_items: Some(akar_layout::AlignItems::CENTER),
-                size: Size { width: Dimension::percent(1.0), height: length(HEADER_H) },
+                size: Size {
+                    width: Dimension::percent(1.0),
+                    height: length(HEADER_H),
+                },
                 ..Default::default()
             },
             &[project_btn],
@@ -143,17 +149,26 @@ impl ChatView {
         layout.set_padding(header, 0.0, 10.0, 0.0, 10.0);
         let messages_area = layout.new_leaf(Style {
             flex_grow: 1.0,
-            size: Size { width: Dimension::percent(1.0), height: Dimension::auto() },
+            size: Size {
+                width: Dimension::percent(1.0),
+                height: Dimension::auto(),
+            },
             ..Default::default()
         });
         let input = layout.new_leaf(Style {
             flex_grow: 1.0,
-            size: Size { width: Dimension::auto(), height: length(36.0_f32) },
+            size: Size {
+                width: Dimension::auto(),
+                height: length(36.0_f32),
+            },
             ..Default::default()
         });
         layout.set_margin(input, 0.0, 8.0, 0.0, 0.0);
         let send = layout.new_leaf(Style {
-            size: Size { width: length(64.0_f32), height: length(36.0_f32) },
+            size: Size {
+                width: length(64.0_f32),
+                height: length(36.0_f32),
+            },
             ..Default::default()
         });
         let input_bar = layout.new_with_children(
@@ -161,7 +176,10 @@ impl ChatView {
                 display: Display::Flex,
                 flex_direction: FlexDirection::Row,
                 align_items: Some(akar_layout::AlignItems::CENTER),
-                size: Size { width: Dimension::percent(1.0), height: length(INPUT_BAR_H) },
+                size: Size {
+                    width: Dimension::percent(1.0),
+                    height: length(INPUT_BAR_H),
+                },
                 ..Default::default()
             },
             &[input, send],
@@ -171,7 +189,10 @@ impl ChatView {
             Style {
                 display: Display::Flex,
                 flex_direction: FlexDirection::Column,
-                size: Size { width: Dimension::percent(1.0), height: Dimension::percent(1.0) },
+                size: Size {
+                    width: Dimension::percent(1.0),
+                    height: Dimension::percent(1.0),
+                },
                 ..Default::default()
             },
             &[header, messages_area, input_bar],
@@ -206,7 +227,11 @@ impl ChatView {
     }
 
     fn push(&mut self, role: Role, text: String) {
-        self.messages.push(Message { role, text, buffer: None });
+        self.messages.push(Message {
+            role,
+            text,
+            buffer: None,
+        });
         self.stick_to_bottom = true;
     }
 
@@ -218,6 +243,19 @@ impl ChatView {
         self.input_text.clear();
         self.edit = TextEditState::default();
         self.push(Role::User, prompt.clone());
+        if prompt == protopie_api::ABORT_COMMAND {
+            match &self.selected {
+                Some(p) => {
+                    self.pending += 1;
+                    self.client.abort_interrupted_apply(p.path.clone());
+                }
+                None => self.push(
+                    Role::Error,
+                    "Select a project before aborting an interrupted application.".into(),
+                ),
+            }
+            return;
+        }
         self.pending += 1;
         match &self.selected {
             Some(p) => self.client.modify(p.path.clone(), prompt),
@@ -248,7 +286,10 @@ impl ChatView {
                 self.push(Role::Error, format!("Could not load projects: {e}"));
             }
             Event::ProjectCreated(Ok(created)) => {
-                self.push(Role::Agent, format!("Created project \"{}\".", created.slug));
+                self.push(
+                    Role::Agent,
+                    format!("Created project \"{}\".", created.slug),
+                );
                 self.select_after_refresh = Some(created.slug);
                 self.client.list_projects();
             }
@@ -297,14 +338,23 @@ impl ChatView {
             cursor_visible,
             &THEME,
         );
-        let send = akar_button(core, &self.layout, self.send, "Send", ButtonVariant::Solid, &THEME);
+        let send = akar_button(
+            core,
+            &self.layout,
+            self.send,
+            "Send",
+            ButtonVariant::Solid,
+            &THEME,
+        );
         if input.submitted || send.clicked {
             self.submit();
         }
     }
 
     fn project_label(&self) -> &str {
-        self.selected.as_ref().map_or("Select project", |p| p.name.as_str())
+        self.selected
+            .as_ref()
+            .map_or("Select project", |p| p.name.as_str())
     }
 
     fn draw_text(
@@ -349,25 +399,52 @@ impl ChatView {
         core.draw_list.push_quad(QuadCall {
             border_color: rgba(THEME.base_300),
             border_width: THEME.border_width,
-            ..quad(btn, if hovered { THEME.base_300 } else { THEME.base_200 }, THEME.radius_field)
+            ..quad(
+                btn,
+                if hovered {
+                    THEME.base_300
+                } else {
+                    THEME.base_200
+                },
+                THEME.radius_field,
+            )
         });
         let label = self.project_label().to_string();
         let text_clip = [btn[0], btn[1], btn[2] - 28.0, btn[3]];
         let ty = btn[1] + (btn[3] - THEME.font_size_base * 1.2) / 2.0;
         Self::draw_text(
-            core, BUF_LABEL, &label, THEME.font_size_base,
-            [btn[0] + THEME.padding_x, ty], text_clip, THEME.base_content, 0.0,
+            core,
+            BUF_LABEL,
+            &label,
+            THEME.font_size_base,
+            [btn[0] + THEME.padding_x, ty],
+            text_clip,
+            THEME.base_content,
+            0.0,
         );
         Self::draw_text(
-            core, BUF_CHEVRON, "\u{25BC}", THEME.font_size_sm,
-            [btn[0] + btn[2] - 20.0, btn[1] + (btn[3] - THEME.font_size_sm * 1.2) / 2.0],
-            btn, THEME.base_content, 0.0,
+            core,
+            BUF_CHEVRON,
+            "\u{25BC}",
+            THEME.font_size_sm,
+            [
+                btn[0] + btn[2] - 20.0,
+                btn[1] + (btn[3] - THEME.font_size_sm * 1.2) / 2.0,
+            ],
+            btn,
+            THEME.base_content,
+            0.0,
         );
 
         // Popup rows: "New Project", "No project", then the projects.
         let total_rows = FIXED_ROWS + self.projects.len();
         let visible = total_rows.min(MAX_ROWS);
-        let popup = [btn[0], btn[1] + btn[3] + 4.0, btn[2], visible as f32 * ROW_H];
+        let popup = [
+            btn[0],
+            btn[1] + btn[3] + 4.0,
+            btn[2],
+            visible as f32 * ROW_H,
+        ];
         let toggled = core.input.is_clicked(btn);
         if self.popup_open
             && core.input.mouse_buttons_pressed[0]
@@ -402,10 +479,20 @@ impl ChatView {
             z: Z_OVERLAY,
             ..quad(popup, THEME.base_100, THEME.radius_field)
         });
-        let inner = [popup[0] + 1.0, popup[1] + 1.0, popup[2] - 2.0, popup[3] - 2.0];
+        let inner = [
+            popup[0] + 1.0,
+            popup[1] + 1.0,
+            popup[2] - 2.0,
+            popup[3] - 2.0,
+        ];
         let mut chosen = None;
         for i in 0..total_rows {
-            let row = [inner[0], inner[1] + i as f32 * ROW_H - self.popup_scroll, inner[2], ROW_H];
+            let row = [
+                inner[0],
+                inner[1] + i as f32 * ROW_H - self.popup_scroll,
+                inner[2],
+                ROW_H,
+            ];
             if row[1] + row[3] < inner[1] || row[1] > inner[1] + inner[3] {
                 continue;
             }
@@ -415,7 +502,10 @@ impl ChatView {
                 NONE_ROW => ("No project".to_string(), self.selected.is_none()),
                 _ => {
                     let p = &self.projects[i - FIXED_ROWS];
-                    (p.name.clone(), self.selected.as_ref().is_some_and(|s| s.path == p.path))
+                    (
+                        p.name.clone(),
+                        self.selected.as_ref().is_some_and(|s| s.path == p.path),
+                    )
                 }
             };
             if core.input.is_hovering(visible_row) {
@@ -427,13 +517,20 @@ impl ChatView {
                     chosen = Some(i);
                 }
             }
-            let color = if active { THEME.primary } else { THEME.base_content };
+            let color = if active {
+                THEME.primary
+            } else {
+                THEME.base_content
+            };
             Self::draw_text(
                 core,
                 BUF_ROW + i as u64,
                 &text,
                 THEME.font_size_base,
-                [row[0] + THEME.padding_x, row[1] + (ROW_H - THEME.font_size_base * 1.2) / 2.0],
+                [
+                    row[0] + THEME.padding_x,
+                    row[1] + (ROW_H - THEME.font_size_base * 1.2) / 2.0,
+                ],
                 visible_row,
                 color,
                 Z_OVERLAY,
@@ -443,8 +540,10 @@ impl ChatView {
             self.popup_open = false;
             match i {
                 NEW_ROW => {
-                    self.new_project =
-                        Some(NewProjectForm { name: String::new(), edit: TextEditState::default() });
+                    self.new_project = Some(NewProjectForm {
+                        name: String::new(),
+                        edit: TextEditState::default(),
+                    });
                     core.input.focused_id = None;
                 }
                 NONE_ROW => self.selected = None,
@@ -455,16 +554,34 @@ impl ChatView {
 
     /// Modal asking for the new project's name. Enter or Create submits; Esc, Cancel, the
     /// close button or a click outside the panel cancels.
-    fn draw_new_project_modal(&mut self, core: &mut AkarCore, size: [f32; 2], cursor_visible: bool) {
+    fn draw_new_project_modal(
+        &mut self,
+        core: &mut AkarCore,
+        size: [f32; 2],
+        cursor_visible: bool,
+    ) {
         let viewport = [0.0, 0.0, size[0], size[1]];
         // `modal_begin` lays out into a layout it is given; its nodes are rebuilt every frame.
         let mut modal_layout = Layout::new();
         modal_layout.set_namespace_id(MODAL_NS);
-        let m = modal_begin(core, &mut modal_layout, viewport, "New project", 300.0, 150.0, &THEME);
+        let m = modal_begin(
+            core,
+            &mut modal_layout,
+            viewport,
+            "New project",
+            300.0,
+            150.0,
+            &THEME,
+        );
         let mut cancel = m.close_requested && {
             // akar reports any click in the viewport; only honour clicks outside the panel
             // or on the close button.
-            let close_btn = [m.panel_rect[0] + m.panel_rect[2] - 40.0, m.panel_rect[1], 40.0, 40.0];
+            let close_btn = [
+                m.panel_rect[0] + m.panel_rect[2] - 40.0,
+                m.panel_rect[1],
+                40.0,
+                40.0,
+            ];
             !core.input.is_hovering(m.panel_rect) || core.input.is_hovering(close_btn)
         };
         let escape = core.input.keys_pressed.contains(&Key::Escape);
@@ -476,7 +593,10 @@ impl ChatView {
         let leaf = |fl: &mut Layout, w: Dimension, h: f32, grow: f32| {
             fl.new_leaf(Style {
                 flex_grow: grow,
-                size: Size { width: w, height: length(h) },
+                size: Size {
+                    width: w,
+                    height: length(h),
+                },
                 ..Default::default()
             })
         };
@@ -490,7 +610,10 @@ impl ChatView {
             Style {
                 display: Display::Flex,
                 flex_direction: FlexDirection::Row,
-                size: Size { width: length(fw), height: length(32.0_f32) },
+                size: Size {
+                    width: length(fw),
+                    height: length(32.0_f32),
+                },
                 ..Default::default()
             },
             &[spacer, cancel_node, create_node],
@@ -499,13 +622,24 @@ impl ChatView {
             Style {
                 display: Display::Flex,
                 flex_direction: FlexDirection::Column,
-                size: Size { width: Dimension::percent(1.0), height: Dimension::percent(1.0) },
+                size: Size {
+                    width: Dimension::percent(1.0),
+                    height: Dimension::percent(1.0),
+                },
                 ..Default::default()
             },
             &[field, row],
         );
-        fl.set_padding(root, m.content_rect[1] + 8.0, 0.0, 0.0, m.content_rect[0] + 16.0);
-        fl.compute(root, (Some(size[0]), Some(size[1])), |_, _, _, _, _| Size::ZERO);
+        fl.set_padding(
+            root,
+            m.content_rect[1] + 8.0,
+            0.0,
+            0.0,
+            m.content_rect[0] + 16.0,
+        );
+        fl.compute(root, (Some(size[0]), Some(size[1])), |_, _, _, _, _| {
+            Size::ZERO
+        });
 
         // akar's text input and button quads sit at z=0, behind the modal panel, so draw the
         // field background and buttons here, above the panel.
@@ -517,7 +651,10 @@ impl ChatView {
             ..quad(field_rect, THEME.base_100, THEME.radius_field)
         });
         let mut create = false;
-        for (node, label, is_create) in [(cancel_node, "Cancel", false), (create_node, "Create", true)] {
+        for (node, label, is_create) in [
+            (cancel_node, "Cancel", false),
+            (create_node, "Create", true),
+        ] {
             let r = fl.rect(node);
             let hovered = core.input.is_hovering(r);
             let fill = match (is_create, hovered) {
@@ -525,10 +662,24 @@ impl ChatView {
                 (false, false) => THEME.base_300,
                 (false, true) => THEME.base_100,
             };
-            core.draw_list.push_quad(QuadCall { z: Z_FLOAT + 0.01, ..quad(r, fill, THEME.radius_field) });
-            let color = if is_create { THEME.primary_content } else { THEME.base_content };
+            core.draw_list.push_quad(QuadCall {
+                z: Z_FLOAT + 0.01,
+                ..quad(r, fill, THEME.radius_field)
+            });
+            let color = if is_create {
+                THEME.primary_content
+            } else {
+                THEME.base_content
+            };
             let metrics = glyphon::Metrics::new(THEME.font_size_base, THEME.font_size_base * 1.2);
-            let buf = core.text_pipeline.set_text(Some(fl.widget_id(node)), label, metrics, None, None, None);
+            let buf = core.text_pipeline.set_text(
+                Some(fl.widget_id(node)),
+                label,
+                metrics,
+                None,
+                None,
+                None,
+            );
             let tw = core.text_pipeline.measure(buf, None).x;
             core.draw_list.push_text(TextCall {
                 buffer_id: buf,
@@ -572,7 +723,8 @@ impl ChatView {
             let name = form.name.trim().to_string();
             self.new_project = None;
             core.input.focused_id = None;
-            self.client.create_project(PROJECTS_BASE_PATH.to_string(), name);
+            self.client
+                .create_project(PROJECTS_BASE_PATH.to_string(), name);
         }
     }
 
@@ -587,20 +739,31 @@ impl ChatView {
         let typing = self.pending > 0;
         let mut typing_buf = None;
         for m in &mut self.messages {
-            let id = core
-                .text_pipeline
-                .set_text(m.buffer, &m.text, metrics, Some(max_text_w), None, None);
+            let id = core.text_pipeline.set_text(
+                m.buffer,
+                &m.text,
+                metrics,
+                Some(max_text_w),
+                None,
+                None,
+            );
             m.buffer = Some(id);
             let s = core.text_pipeline.measure(id, Some(max_text_w));
-            sizes.push([s.x.ceil() + 2.0 * BUBBLE_PAD_X, s.y.ceil() + 2.0 * BUBBLE_PAD_Y]);
+            sizes.push([
+                s.x.ceil() + 2.0 * BUBBLE_PAD_X,
+                s.y.ceil() + 2.0 * BUBBLE_PAD_Y,
+            ]);
         }
         if typing {
-            let id = core
-                .text_pipeline
-                .set_text(Some(2), "…", metrics, Some(max_text_w), None, None);
+            let id =
+                core.text_pipeline
+                    .set_text(Some(2), "…", metrics, Some(max_text_w), None, None);
             typing_buf = Some(id);
             let s = core.text_pipeline.measure(id, Some(max_text_w));
-            sizes.push([s.x.ceil() + 2.0 * BUBBLE_PAD_X, s.y.ceil() + 2.0 * BUBBLE_PAD_Y]);
+            sizes.push([
+                s.x.ceil() + 2.0 * BUBBLE_PAD_X,
+                s.y.ceil() + 2.0 * BUBBLE_PAD_Y,
+            ]);
         }
 
         let content_h: f32 = sizes.iter().map(|s| s[1] + MSG_GAP).sum::<f32>() + 2.0 * MSG_MARGIN;
