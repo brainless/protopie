@@ -399,14 +399,35 @@ fn stale_plan_conflicts() {
 #[test]
 fn unsupported_operations_write_nothing() {
     let (_t, dir) = fresh();
-    let mut plan = nav_plan(&dir);
-    plan.operations = vec![Operation::CreatePage { label: "x".into() }];
-    let before = disk(&dir);
-    assert!(matches!(
-        apply_plan(&dir, CONV, &plan, &opts()).unwrap(),
-        ApplyOutcome::Unsupported { .. }
-    ));
-    assert_eq!(disk(&dir), before);
+    let edit = |value: &str| StyleEdit {
+        property: StyleProperty::BorderRadius,
+        value: value.into(),
+    };
+    let set_style = |scope, edits| Operation::SetStyle {
+        target: ElementId::new("hero_1"),
+        change: crate::parser::StyleChange::RoundedCorners,
+        scope,
+        edits,
+    };
+    for op in [
+        // Nothing to write, a definition-wide edit, and a value outside the policy.
+        set_style(StyleScope::Instance, vec![]),
+        set_style(StyleScope::Definition, vec![edit("var(--radius-md)")]),
+        set_style(StyleScope::Instance, vec![edit("5px; color: red")]),
+        Operation::SetNavigationDestination {
+            item: ElementId::new("hero_1"),
+            destination: Destination::Unresolved,
+        },
+    ] {
+        let mut plan = nav_plan(&dir);
+        plan.operations = vec![op];
+        let before = disk(&dir);
+        assert!(matches!(
+            apply_plan(&dir, CONV, &plan, &opts()).unwrap(),
+            ApplyOutcome::Unsupported { .. }
+        ));
+        assert_eq!(disk(&dir), before);
+    }
 }
 
 #[test]
@@ -958,6 +979,7 @@ fn item_plan(dir: &Path, destination: Destination, navigation: &str) -> Plan {
         }],
         operations: Vec::new(),
         follow_up: Vec::new(),
+        resolves: Vec::new(),
     };
     plan.operations = vec![Operation::AddNavigationItem {
         navigation: ElementId::new(navigation),
@@ -974,11 +996,11 @@ fn navigation_item_plans_that_cannot_hold_write_nothing() {
     let (_t, dir) = fresh();
     apply_plan(&dir, CONV, &nav_plan(&dir), &opts()).unwrap();
     let before = disk(&dir);
-    // Linking is T6: no destination other than Unresolved may be applied.
+    // A malformed external destination is never applied.
     let linked = item_plan(
         &dir,
         Destination::External {
-            url: "https://x.example".into(),
+            url: "javascript:alert(1)".into(),
         },
         "nav_1",
     );

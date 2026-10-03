@@ -7,7 +7,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub use crate::parser::{Request as ParsedRequest, Span, StyleChange, UnsupportedReason};
+pub use crate::parser::{
+    ElementRole, PositionRelation, Request as ParsedRequest, Span, StyleChange, UnsupportedReason,
+};
 
 /// Schema version of the persisted project model (`.protopie/model.json`).
 pub const MODEL_SCHEMA_VERSION: u32 = 1;
@@ -19,8 +21,11 @@ pub const PLAN_SCHEMA_VERSION: u32 = 1;
 pub const POLICY_VERSION: u32 = 1;
 /// Conversation used by the simple `modify(path, command)` entry point.
 pub const DEFAULT_CONVERSATION_ID: &str = "default";
-/// Page scope of the reference application's single page.
+/// Page scope of the reference application's initial page. It is implicit in
+/// every project: it has no [`PageRecord`] and always lives at [`HOME_PATH`].
 pub const DEFAULT_PAGE: &str = "home";
+pub const HOME_PATH: &str = "/";
+pub const HOME_LABEL: &str = "Home";
 
 /// Stable identifier of a modelled element, e.g. `nav_1`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -41,6 +46,148 @@ pub enum ElementKind {
     Hero,
     Image,
     Form,
+    Footer,
+    Button,
+}
+
+impl ElementKind {
+    /// Elements that stack in a page's top-level flow and can be positioned
+    /// relative to one another.
+    pub fn is_flow(self) -> bool {
+        matches!(
+            self,
+            ElementKind::Hero
+                | ElementKind::Image
+                | ElementKind::Form
+                | ElementKind::Footer
+                | ElementKind::Button
+        )
+    }
+
+    /// Elements that lead somewhere (their `destination` is meaningful).
+    pub fn has_destination(self) -> bool {
+        matches!(self, ElementKind::NavigationItem | ElementKind::Button)
+    }
+
+    /// Plain word used in messages and as the ID prefix stem.
+    pub fn word(self) -> &'static str {
+        match self {
+            ElementKind::Navigation => "navigation",
+            ElementKind::NavigationItem => "navigation item",
+            ElementKind::Hero => "hero",
+            ElementKind::Image => "image",
+            ElementKind::Form => "form",
+            ElementKind::Footer => "footer",
+            ElementKind::Button => "button",
+        }
+    }
+
+    /// Prefix of generated element IDs (`form_1`, `img_2`).
+    pub fn id_prefix(self) -> &'static str {
+        match self {
+            ElementKind::Navigation => "nav",
+            ElementKind::NavigationItem => "item",
+            ElementKind::Hero => "hero",
+            ElementKind::Image => "img",
+            ElementKind::Form => "form",
+            ElementKind::Footer => "footer",
+            ElementKind::Button => "button",
+        }
+    }
+}
+
+impl From<ElementRole> for ElementKind {
+    fn from(role: ElementRole) -> Self {
+        match role {
+            ElementRole::Image => ElementKind::Image,
+            ElementRole::Form => ElementKind::Form,
+            ElementRole::Hero => ElementKind::Hero,
+            ElementRole::Footer => ElementKind::Footer,
+            ElementRole::Button => ElementKind::Button,
+        }
+    }
+}
+
+/// Where an element goes or moves to: a relation to a concrete anchor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Position {
+    pub relation: PositionRelation,
+    pub anchor: ElementId,
+}
+
+/// One piece of content a generated element needs before it can exist. The
+/// agent asks for each missing one instead of inventing text, images or
+/// fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentField {
+    /// Headline of a hero.
+    Headline,
+    /// Text of a footer.
+    FooterText,
+    /// Label of a button.
+    ButtonLabel,
+    /// Address of an image (an http(s) URL).
+    ImageSource,
+    /// Alternative text of an image.
+    ImageAlt,
+    /// Field labels of a form (comma separated when asked).
+    FormFields,
+    /// Label of a form's submit button.
+    SubmitLabel,
+}
+
+/// Literal content of a generated element; every field is user supplied.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ElementContent {
+    /// Hero headline, footer text, button label or form submit label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Image address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub src: Option<String>,
+    /// Image alternative text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt: Option<String>,
+    /// Form field labels, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<String>,
+}
+
+impl ElementContent {
+    /// The first content field `kind` still needs, if any.
+    pub fn missing(&self, kind: ElementKind) -> Option<ContentField> {
+        let text = self.text.is_none();
+        match kind {
+            ElementKind::Hero if text => Some(ContentField::Headline),
+            ElementKind::Footer if text => Some(ContentField::FooterText),
+            ElementKind::Button if text => Some(ContentField::ButtonLabel),
+            ElementKind::Image if self.src.is_none() => Some(ContentField::ImageSource),
+            ElementKind::Image if self.alt.is_none() => Some(ContentField::ImageAlt),
+            ElementKind::Form if self.fields.is_empty() => Some(ContentField::FormFields),
+            ElementKind::Form if text => Some(ContentField::SubmitLabel),
+            _ => None,
+        }
+    }
+}
+
+/// An element to create: what it is, where it goes and the content gathered
+/// so far. A spec with [`ElementContent::missing`] content is not plannable yet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ElementSpec {
+    pub kind: ElementKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<Position>,
+    #[serde(default)]
+    pub content: ElementContent,
+}
+
+/// What a placement question is about.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PlacementAction {
+    Add { spec: ElementSpec },
+    Move { target: ElementId },
 }
 
 // ---------------------------------------------------------------- project / session
@@ -71,6 +218,43 @@ pub enum StyleScope {
     Definition,
 }
 
+/// How a container lays out its children. Only known layouts support relational
+/// selectors (`below`) and `full width`; source order alone is never geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContainerLayout {
+    Vertical,
+    Horizontal,
+}
+
+/// A style property the style policy can edit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StyleProperty {
+    Padding,
+    BorderRadius,
+    Width,
+}
+
+impl StyleProperty {
+    /// The CSS property name; also the key in [`StyleBinding::values`].
+    pub fn css_name(self) -> &'static str {
+        match self {
+            StyleProperty::Padding => "padding",
+            StyleProperty::BorderRadius => "border-radius",
+            StyleProperty::Width => "width",
+        }
+    }
+}
+
+/// One absolute style result: the value is never read back and incremented by
+/// the emitter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StyleEdit {
+    pub property: StyleProperty,
+    pub value: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StyleBinding {
     pub file: String,
@@ -78,6 +262,16 @@ pub struct StyleBinding {
     #[serde(default)]
     pub region: Option<String>,
     pub scope: StyleScope,
+    /// Declared values of the properties the style policy edits, keyed by CSS
+    /// name (`padding`, `border-radius`, `width`). This is the planner's view
+    /// of the cascade for this element; absent means undeclared.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: BTreeMap<String, String>,
+    /// True once the element has its own rule
+    /// `.class[data-protopie-id="<id>"]`, so edits no longer touch the shared
+    /// class rule.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub instance_override: bool,
 }
 
 /// One modelled element in a project snapshot.
@@ -99,6 +293,15 @@ pub struct ElementRecord {
     /// Where a navigation item leads. `None` for non-items.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub destination: Option<Destination>,
+    /// How this element lays out its children, when it is a container with a
+    /// known layout. Sibling order is the order of `ProjectSnapshot::elements`
+    /// among elements with the same page and parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<ContainerLayout>,
+    /// Literal content of a generated element (hero, image, form, footer,
+    /// button); the component is regenerated from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<ElementContent>,
 }
 
 impl ElementRecord {
@@ -113,6 +316,8 @@ impl ElementRecord {
             source: None,
             style: None,
             destination: None,
+            layout: None,
+            content: None,
         }
     }
 }
@@ -125,6 +330,23 @@ pub struct OwnedSource {
     #[serde(default)]
     pub region: Option<String>,
     pub fingerprint: String,
+}
+
+/// A page created by the agent (the implicit home page has no record).
+///
+/// `id` doubles as the page scope of elements (`ElementRecord::page`) and as
+/// the route slug: `path` is always `/<id>`. The emitter derives the component
+/// and file names from it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PageRecord {
+    pub id: String,
+    pub label: String,
+    pub path: String,
+    /// Component (and file stem) of the page in `src/pages/`.
+    pub component: String,
+    /// True once a route for the page is registered in the router.
+    #[serde(default)]
+    pub registered: bool,
 }
 
 /// Explicit, read-only view of a project for the pure stages.
@@ -140,6 +362,12 @@ pub struct ProjectSnapshot {
     /// Highest number ever issued per ID prefix, so IDs are never reused.
     #[serde(default)]
     pub id_counters: BTreeMap<String, u64>,
+    /// Pages created by the agent, in creation order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pages: Vec<PageRecord>,
+    /// Layout of the top level of a page (elements without a parent), when known.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub page_layouts: BTreeMap<String, ContainerLayout>,
 }
 
 impl ProjectSnapshot {
@@ -150,6 +378,50 @@ impl ProjectSnapshot {
             elements: Vec::new(),
             owned: Vec::new(),
             id_counters: BTreeMap::new(),
+            pages: Vec::new(),
+            page_layouts: BTreeMap::new(),
+        }
+    }
+
+    /// Known layout of the container holding children of `parent` (the page
+    /// itself when `parent` is `None`).
+    pub fn container_layout(
+        &self,
+        parent: Option<&ElementId>,
+        page: &str,
+    ) -> Option<ContainerLayout> {
+        match parent {
+            Some(id) => self.element(id).and_then(|e| e.layout),
+            None => self.page_layouts.get(page).copied(),
+        }
+    }
+
+    pub fn page(&self, id: &str) -> Option<&PageRecord> {
+        self.pages.iter().find(|p| p.id == id)
+    }
+
+    /// True for the implicit home page and every created page.
+    pub fn page_exists(&self, id: &str) -> bool {
+        id == DEFAULT_PAGE || self.page(id).is_some()
+    }
+
+    /// Display label of a page scope.
+    pub fn page_label(&self, id: &str) -> Option<&str> {
+        if id == DEFAULT_PAGE {
+            Some(HOME_LABEL)
+        } else {
+            self.page(id).map(|p| p.label.as_str())
+        }
+    }
+
+    /// Route path of a page scope; created pages need a registered route.
+    pub fn page_path(&self, id: &str) -> Option<&str> {
+        if id == DEFAULT_PAGE {
+            Some(HOME_PATH)
+        } else {
+            self.page(id)
+                .filter(|p| p.registered)
+                .map(|p| p.path.as_str())
         }
     }
 
@@ -334,6 +606,22 @@ pub enum ResolvedRequest {
         navigation: ElementId,
         label: String,
     },
+    /// Direct page creation: the page and its route, nothing else.
+    CreatePage { label: String },
+    /// A style change of one resolved element.
+    Style {
+        target: ElementId,
+        change: StyleChange,
+    },
+    /// Create a page element. The spec's content may still be incomplete; the
+    /// planner then asks for it. Hero and footer are ensure-style: the planner
+    /// reports no change when the page already has one.
+    AddElement { spec: ElementSpec },
+    /// Move an existing element relative to an anchor.
+    MoveElement {
+        target: ElementId,
+        position: Position,
+    },
 }
 
 // ---------------------------------------------------------------- plan
@@ -363,11 +651,22 @@ pub enum Operation {
         id: ElementId,
         kind: ElementKind,
         name: String,
+        /// Literal content of a hero, image, form, footer or button.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<ElementContent>,
     },
     InsertElement {
         element: ElementId,
         page: String,
         parent: Option<ElementId>,
+        /// Sibling position; `None` appends at the end of the container.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<Position>,
+    },
+    /// Moves an element among its siblings.
+    MoveElement {
+        element: ElementId,
+        position: Position,
     },
     AddNavigationItem {
         navigation: ElementId,
@@ -375,16 +674,19 @@ pub enum Operation {
         label: String,
         destination: Destination,
     },
+    /// Absolute style results for one element. `scope` is what the edit
+    /// affects: `Instance` changes only `target`, never other users of a
+    /// shared class; `Definition` is reserved for a future request form.
     SetStyle {
         target: ElementId,
         change: StyleChange,
+        scope: StyleScope,
+        edits: Vec<StyleEdit>,
     },
-    CreatePage {
-        label: String,
-    },
-    RegisterRoute {
-        page: String,
-    },
+    /// Creates page `page` (its ID and route slug) shown as `label`.
+    CreatePage { page: String, label: String },
+    /// Registers the route of an existing page in the router.
+    RegisterRoute { page: String, path: String },
     SetNavigationDestination {
         item: ElementId,
         destination: Destination,
@@ -394,9 +696,28 @@ pub enum Operation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Precondition {
-    RevisionIs { revision: u64 },
-    ElementExists { id: ElementId },
-    ElementAbsent { id: ElementId },
+    RevisionIs {
+        revision: u64,
+    },
+    ElementExists {
+        id: ElementId,
+    },
+    ElementAbsent {
+        id: ElementId,
+    },
+    PageExists {
+        page: String,
+    },
+    PageAbsent {
+        page: String,
+    },
+    /// The element's recorded declared value of `property` is `value`
+    /// (`None`: undeclared). Guards absolute style results.
+    StyleValueIs {
+        id: ElementId,
+        property: StyleProperty,
+        value: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -408,6 +729,10 @@ pub struct Plan {
     pub preconditions: Vec<Precondition>,
     pub operations: Vec<Operation>,
     pub follow_up: Vec<Question>,
+    /// Pending questions this plan answers. Applying the plan removes them
+    /// from the session atomically with its changes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolves: Vec<String>,
 }
 
 // ---------------------------------------------------------------- questions / answers
@@ -436,8 +761,65 @@ pub enum Continuation {
     Rephrase { suggestion: String },
     /// Add `label` to the navigation the answer selects.
     ChooseNavigation { label: String },
+    /// Pick which element a style change applies to (option keys are element IDs).
+    ChooseStyleTarget { change: StyleChange },
+    /// Pick the anchor of a placement (option keys are element IDs).
+    ChoosePlacementAnchor {
+        action: PlacementAction,
+        relation: PositionRelation,
+    },
+    /// Pick which element to move (option keys are element IDs); the anchor
+    /// is resolved afterwards.
+    ChooseMoveTarget {
+        relation: PositionRelation,
+        anchor: ElementRole,
+    },
+    /// Free text for the next missing content field of `spec`.
+    ProvideContent { spec: ElementSpec },
     /// Choose where an unresolved navigation item leads.
     ChooseDestination { item: ElementId },
+    /// Pick the existing page or section an item leads to.
+    ChooseExisting { item: ElementId },
+    /// Provide the external URL an item leads to (free text).
+    EnterUrl { item: ElementId },
+    /// Provide a name for the new page an item leads to (free text).
+    NamePage { item: ElementId },
+    /// The new page's path is taken: link the existing page or create the
+    /// page at `alternative` instead.
+    ResolveCollision {
+        item: ElementId,
+        existing_page: String,
+        alternative: String,
+    },
+}
+
+impl Continuation {
+    /// The navigation item a destination-related continuation is about.
+    pub fn item(&self) -> Option<&ElementId> {
+        match self {
+            Continuation::ChooseDestination { item }
+            | Continuation::ChooseExisting { item }
+            | Continuation::EnterUrl { item }
+            | Continuation::NamePage { item }
+            | Continuation::ResolveCollision { item, .. } => Some(item),
+            Continuation::Rephrase { .. }
+            | Continuation::ChooseNavigation { .. }
+            | Continuation::ChooseStyleTarget { .. }
+            | Continuation::ChoosePlacementAnchor { .. }
+            | Continuation::ChooseMoveTarget { .. }
+            | Continuation::ProvideContent { .. } => None,
+        }
+    }
+
+    /// True if the answer is free text rather than one of the options.
+    pub fn takes_text(&self) -> bool {
+        matches!(
+            self,
+            Continuation::EnterUrl { .. }
+                | Continuation::NamePage { .. }
+                | Continuation::ProvideContent { .. }
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -474,6 +856,11 @@ pub enum RejectionReason {
     Parse { reason: UnsupportedReason },
     /// Understood, but no planner/emitter capability exists yet.
     CapabilityNotImplemented,
+    /// No element matches the selector (nothing to change).
+    TargetNotFound,
+    /// The container layout is unknown or does not support the request;
+    /// nothing is guessed.
+    UnsupportedLayout,
     /// The project has no (or an unreadable) `.protopie/` model; see
     /// [`crate::project::initialize_project`].
     ProjectNotInitialized,
@@ -507,6 +894,11 @@ pub enum PlanOutcome {
     },
     Unsupported {
         rejection: Rejection,
+    },
+    /// The request (typically an answer) no longer fits the project or the
+    /// conversation; nothing is changed.
+    Conflict {
+        reason: String,
     },
 }
 
@@ -606,6 +998,7 @@ mod tests {
             policy_version: POLICY_VERSION,
             base_revision: 2,
             preconditions: vec![Precondition::RevisionIs { revision: 2 }],
+            resolves: Vec::new(),
             operations: vec![
                 Operation::AddNavigationItem {
                     navigation: ElementId::new("nav_1"),
@@ -616,6 +1009,11 @@ mod tests {
                 Operation::SetStyle {
                     target: ElementId::new("img_1"),
                     change: StyleChange::RoundedCorners,
+                    scope: StyleScope::Instance,
+                    edits: vec![StyleEdit {
+                        property: StyleProperty::BorderRadius,
+                        value: "var(--radius-md)".into(),
+                    }],
                 },
             ],
             follow_up: vec![question.clone()],

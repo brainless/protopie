@@ -15,6 +15,7 @@ pub struct ChatResponse {
 
 pub const PROJECTS_PATH: &str = "/projects";
 pub const PROJECTS_MODIFY_PATH: &str = "/projects/modify";
+pub const PROJECTS_ANSWER_PATH: &str = "/projects/answer";
 pub const PROJECTS_ABORT_PATH: &str = "/projects/recovery/abort";
 pub const ABORT_COMMAND: &str = "/abort-interrupted-apply";
 
@@ -101,6 +102,26 @@ pub struct ModifyProjectRequest {
     pub dry_run: bool,
 }
 
+/// Body of `POST /projects/answer`: a structured answer to a pending question
+/// of the conversation. Send `option_key` (a key from the question's
+/// `option_keys`) or free `text` (an option number or label, a URL or a page
+/// name, depending on the question). Replies as `/projects/modify` does.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnswerProjectRequest {
+    pub project_path: String,
+    pub question_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModifyProjectResponse {
     /// Human-readable summary for chat.
@@ -117,6 +138,12 @@ pub struct QuestionSummary {
     pub prompt: String,
     /// Option labels in display order.
     pub options: Vec<String>,
+    /// Stable option keys, parallel to `options`, for structured answers.
+    #[serde(default)]
+    pub option_keys: Vec<String>,
+    /// True if the answer is free text (a URL, a page name) rather than an option.
+    #[serde(default)]
+    pub takes_text: bool,
     /// True if the edit cannot proceed until answered.
     pub blocking: bool,
 }
@@ -216,6 +243,20 @@ mod tests {
     }
 
     #[test]
+    fn answer_requests_and_question_keys_are_optional_on_the_wire() {
+        let a: AnswerProjectRequest = serde_json::from_str(
+            r#"{"project_path":"/p","question_id":"q1-destination","option_key":"new_page"}"#,
+        )
+        .unwrap();
+        assert_eq!(a.option_key.as_deref(), Some("new_page"));
+        assert!(a.text.is_none() && a.request_id.is_none() && !a.dry_run);
+        let q: QuestionSummary =
+            serde_json::from_str(r#"{"id":"q","prompt":"?","options":["A"],"blocking":false}"#)
+                .unwrap();
+        assert!(q.option_keys.is_empty() && !q.takes_text);
+    }
+
+    #[test]
     fn display_text_lists_follow_up_after_an_applied_change() {
         let applied = ModifyProjectResponse {
             reply: "Added it.".into(),
@@ -226,6 +267,8 @@ mod tests {
                     id: "q".into(),
                     prompt: "Where?".into(),
                     options: vec!["A".into()],
+                    option_keys: vec![],
+                    takes_text: false,
                     blocking: false,
                 }],
             }),
@@ -255,6 +298,8 @@ mod tests {
                     id: "q".into(),
                     prompt: "Which?".into(),
                     options: vec!["A".into(), "B".into()],
+                    option_keys: vec![],
+                    takes_text: false,
                     blocking: true,
                 }],
             }),

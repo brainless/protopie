@@ -215,7 +215,10 @@ impl ChatView {
             send,
             messages: vec![Message {
                 role: Role::Agent,
-                text: "Hi! Send me a prompt and I'll echo it back.".into(),
+                text: "Hi! Pick a project and describe a UI change, e.g. \"Need a top navigation\" then \"Add Contact Us\". \
+                       When I ask a question, reply with an option number or its text. \
+                       Without a project I just echo your message."
+                    .into(),
                 buffer: None,
             }],
             input_text: String::new(),

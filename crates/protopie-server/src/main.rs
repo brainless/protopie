@@ -7,10 +7,11 @@ use axum::{
     Json, Router,
 };
 use protopie_api::{
-    AbortProjectRequest, AbortProjectResponse, ChatRequest, ChatResponse, CreateProjectRequest,
-    CreateProjectResponse, ErrorResponse, ListProjectsResponse, ModifyOutcome,
-    ModifyProjectRequest, ModifyProjectResponse, ProjectInfo, QuestionSummary, CHAT_PATH,
-    HEALTH_PATH, PROJECTS_ABORT_PATH, PROJECTS_MODIFY_PATH, PROJECTS_PATH,
+    AbortProjectRequest, AbortProjectResponse, AnswerProjectRequest, ChatRequest, ChatResponse,
+    CreateProjectRequest, CreateProjectResponse, ErrorResponse, ListProjectsResponse,
+    ModifyOutcome, ModifyProjectRequest, ModifyProjectResponse, ProjectInfo, QuestionSummary,
+    CHAT_PATH, HEALTH_PATH, PROJECTS_ABORT_PATH, PROJECTS_ANSWER_PATH, PROJECTS_MODIFY_PATH,
+    PROJECTS_PATH,
 };
 use protopie_ui_agent as agent;
 
@@ -120,6 +121,41 @@ async fn modify_project(
     }))
 }
 
+async fn answer_project(
+    Json(req): Json<AnswerProjectRequest>,
+) -> Result<Json<ModifyProjectResponse>, ApiError> {
+    let choice = match (req.option_key, req.text) {
+        (Some(key), None) => agent::contracts::AnswerChoice::Option { key },
+        (None, Some(text)) => agent::contracts::AnswerChoice::Text { text },
+        _ => {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                "send exactly one of option_key or text".into(),
+            ))
+        }
+    };
+    let answer = agent::contracts::Answer {
+        question_id: req.question_id,
+        choice,
+    };
+    let result = blocking(move || {
+        agent::answer_with(
+            Path::new(&req.project_path),
+            &answer,
+            &agent::ModifyOptions {
+                conversation_id: req.conversation_id.as_deref(),
+                request_id: req.request_id.as_deref(),
+                dry_run: req.dry_run,
+            },
+        )
+    })
+    .await?;
+    Ok(Json(ModifyProjectResponse {
+        reply: result.summary,
+        outcome: Some(to_wire(result.outcome)),
+    }))
+}
+
 async fn abort_project(
     Json(req): Json<AbortProjectRequest>,
 ) -> Result<Json<AbortProjectResponse>, ApiError> {
@@ -158,8 +194,10 @@ fn question_summaries(questions: Vec<agent::contracts::Question>) -> Vec<Questio
         .into_iter()
         .map(|q| QuestionSummary {
             blocking: q.kind == agent::contracts::QuestionKind::BlockingClarification,
+            takes_text: q.continuation.takes_text(),
             id: q.id,
             prompt: q.prompt,
+            option_keys: q.options.iter().map(|o| o.key.clone()).collect(),
             options: q.options.into_iter().map(|o| o.label).collect(),
         })
         .collect()
@@ -206,6 +244,7 @@ fn app() -> Router {
         .route(HEALTH_PATH, get(|| async { "ok" }))
         .route(PROJECTS_PATH, get(list_projects).post(create_project))
         .route(PROJECTS_MODIFY_PATH, post(modify_project))
+        .route(PROJECTS_ANSWER_PATH, post(answer_project))
         .route(PROJECTS_ABORT_PATH, post(abort_project))
 }
 
@@ -409,6 +448,108 @@ mod tests {
         )
         .await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn destination_conversation_through_chat_replies_and_structured_answers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("projects").to_string_lossy().into_owned();
+        let (_, body) = call(
+            "POST",
+            "/projects",
+            serde_json::json!({"base_path": base, "name": "dest"}),
+        )
+        .await;
+        let path = body["path"].as_str().unwrap().to_string();
+        let read = |rel: &str| {
+            std::fs::read_to_string(std::path::Path::new(&path).join(rel)).unwrap_or_default()
+        };
+        let modify = |command: &str, request_id: &str| {
+            serde_json::json!({
+                "project_path": path, "command": command,
+                "conversation_id": "chat-1", "request_id": request_id,
+            })
+        };
+        call(
+            "POST",
+            "/projects/modify",
+            modify("Need a top navigation", "r1"),
+        )
+        .await;
+        let (_, body) = call("POST", "/projects/modify", modify("Add Contact Us", "r2")).await;
+        let question = body["outcome"]["questions"][0].clone();
+        assert_eq!(question["option_keys"][0], "new_page");
+        assert_eq!(question["takes_text"], false);
+        let id = question["id"].as_str().unwrap().to_string();
+
+        // Both a bare chat reply and a structured answer are accepted; a
+        // malformed structured answer is a 400 and an unknown question a conflict.
+        let answer = |body: serde_json::Value| {
+            let mut base = serde_json::json!({
+                "project_path": path, "question_id": id, "conversation_id": "chat-1",
+            });
+            base.as_object_mut()
+                .unwrap()
+                .extend(body.as_object().unwrap().clone());
+            base
+        };
+        let (st, _) = call("POST", PROJECTS_ANSWER_PATH, answer(serde_json::json!({}))).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        let (st, _) = call(
+            "POST",
+            PROJECTS_ANSWER_PATH,
+            answer(serde_json::json!({"option_key": "a", "text": "b"})),
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        let (_, body) = call(
+            "POST",
+            PROJECTS_ANSWER_PATH,
+            answer(serde_json::json!({"option_key": "new_page", "dry_run": true})),
+        )
+        .await;
+        assert_eq!(body["outcome"]["kind"], "preview");
+        assert!(!read("src/router.ts").contains("/contact-us"));
+
+        let (_, body) = call(
+            "POST",
+            PROJECTS_ANSWER_PATH,
+            answer(serde_json::json!({"option_key": "new_page", "request_id": "a1"})),
+        )
+        .await;
+        assert_eq!(body["outcome"]["kind"], "applied", "{body}");
+        assert!(read("src/router.ts").contains("/contact-us"));
+        assert!(read("src/components/TopNav.tsx").contains("href={\"/contact-us\"}"));
+        let after = read("src/router.ts");
+        let (_, retry) = call(
+            "POST",
+            PROJECTS_ANSWER_PATH,
+            answer(serde_json::json!({"option_key": "new_page", "request_id": "a1"})),
+        )
+        .await;
+        assert!(retry["reply"].as_str().unwrap().contains("already applied"));
+        let (_, stale) = call(
+            "POST",
+            PROJECTS_ANSWER_PATH,
+            answer(serde_json::json!({"option_key": "new_page", "request_id": "a2"})),
+        )
+        .await;
+        assert_eq!(stale["outcome"]["kind"], "conflict");
+        assert_eq!(read("src/router.ts"), after);
+
+        // Chat reply path: a number answers the destination of the next item.
+        call("POST", "/projects/modify", modify("Add Docs", "r3")).await;
+        let (_, ext) = call("POST", "/projects/modify", modify("3", "r4")).await;
+        assert_eq!(ext["outcome"]["kind"], "needs_clarification");
+        assert_eq!(ext["outcome"]["questions"][0]["takes_text"], true);
+        let (_, linked) = call(
+            "POST",
+            "/projects/modify",
+            modify("https://example.com/docs", "r5"),
+        )
+        .await;
+        assert_eq!(linked["outcome"]["kind"], "applied", "{linked}");
+        assert!(read("src/components/TopNav.tsx").contains("https://example.com/docs"));
     }
 
     #[tokio::test]

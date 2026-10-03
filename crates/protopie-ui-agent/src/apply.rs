@@ -59,6 +59,7 @@ use serde::{Deserialize, Serialize};
 use crate::contracts::*;
 use crate::emit;
 use crate::project::{self, extract_region, fingerprint, replace_region, verify_owned};
+use crate::style;
 use crate::{io_err, resolve_in_project, Error, Result};
 
 const LOCK_FILE: &str = ".protopie/lock";
@@ -67,6 +68,10 @@ const LEDGER_FILE: &str = ".protopie/applied.json";
 
 const LAYOUT_FILE: &str = "src/App.tsx";
 const LAYOUT_REGION: &str = "layout-top";
+const HOME_FILE: &str = "src/pages/Home.tsx";
+const HOME_FLOW_REGION: &str = "home-flow";
+const ROUTER_FILE: &str = "src/router.ts";
+const ROUTES_REGION: &str = "routes";
 
 #[derive(Debug, Default, Clone)]
 pub struct ApplyOptions<'a> {
@@ -658,18 +663,100 @@ fn component_name(rec: &ElementRecord) -> Option<String> {
     is_ident(name, true).then(|| name.to_string())
 }
 
+/// A navigation link target checked against the model.
+enum ResolvedLink {
+    Internal {
+        path: String,
+        anchor: Option<String>,
+    },
+    External(String),
+}
+
+enum LinkError {
+    /// The destination refers to something that does not exist (any more).
+    Missing(String),
+    /// The destination itself is malformed.
+    Invalid(String),
+}
+
+/// Checks `destination` against the model and resolves it to a link.
+/// `Unresolved` is no link at all.
+fn link_for(
+    snapshot: &ProjectSnapshot,
+    destination: &Destination,
+) -> std::result::Result<Option<ResolvedLink>, LinkError> {
+    let page_path = |page: &str| {
+        snapshot.page_path(page).map(str::to_string).ok_or_else(|| {
+            LinkError::Missing(format!("page {page} does not exist or has no route"))
+        })
+    };
+    match destination {
+        Destination::Unresolved => Ok(None),
+        Destination::Page { page } => Ok(Some(ResolvedLink::Internal {
+            path: page_path(page)?,
+            anchor: None,
+        })),
+        Destination::Section { page, section } => {
+            let path = page_path(page)?;
+            let anchorable = is_element_id(section)
+                && snapshot
+                    .element(&ElementId::new(section.as_str()))
+                    .is_some_and(|e| e.kind == ElementKind::Hero && &e.page == page);
+            if !anchorable {
+                return Err(LinkError::Missing(format!(
+                    "section {section} does not exist on page {page}"
+                )));
+            }
+            Ok(Some(ResolvedLink::Internal {
+                path,
+                anchor: Some(section.clone()),
+            }))
+        }
+        Destination::External { url } => match emit::validate_external_url(url) {
+            Some(valid) if &valid == url => Ok(Some(ResolvedLink::External(valid))),
+            _ => Err(LinkError::Invalid(format!(
+                "{url:?} is not a valid http(s) URL"
+            ))),
+        },
+    }
+}
+
 /// Renders a navigation component from the model: its items in order.
-fn render_navigation(snapshot: &ProjectSnapshot, nav: &ElementId) -> Result<String> {
+fn render_navigation(dir: &Path, snapshot: &ProjectSnapshot, nav: &ElementId) -> Result<String> {
     let rec = snapshot.element(nav).expect("navigation is in the model");
     let name = component_name(rec).expect("navigation has a component source");
-    let items: Vec<_> = snapshot
+    let mut links = Vec::new();
+    for e in snapshot
         .elements
         .iter()
         .filter(|e| e.kind == ElementKind::NavigationItem && e.parent.as_ref() == Some(nav))
-        .filter_map(|e| {
+    {
+        let link = match e.destination.as_ref().map(|d| link_for(snapshot, d)) {
+            None | Some(Ok(None)) => None,
+            Some(Ok(Some(link))) => Some(link),
+            Some(Err(LinkError::Missing(m) | LinkError::Invalid(m))) => {
+                return Err(metadata_error(
+                    dir,
+                    &project::model_rel(),
+                    format!("item {} has an invalid destination: {m}", e.id.0),
+                ))
+            }
+        };
+        links.push((e, link));
+    }
+    let items: Vec<_> = links
+        .iter()
+        .filter_map(|(e, link)| {
             Some(emit::NavItemView {
                 id: &e.id,
                 label: e.label.as_deref()?,
+                link: link.as_ref().map(|l| match l {
+                    ResolvedLink::Internal { path, anchor } => emit::LinkView::Internal {
+                        path,
+                        anchor: anchor.as_deref(),
+                    },
+                    ResolvedLink::External(url) => emit::LinkView::External { url },
+                }),
             })
         })
         .collect();
@@ -679,6 +766,156 @@ fn render_navigation(snapshot: &ProjectSnapshot, nav: &ElementId) -> Result<Stri
         rec.placement.unwrap_or(Placement::Top),
         &items,
     ))
+}
+
+/// Re-renders a navigation's component, and its stylesheet when it predates
+/// the link styles (so linked items are styled in older projects too).
+fn refresh_navigation(
+    ws: &mut Workspace,
+    snapshot: &ProjectSnapshot,
+    nav: &ElementId,
+    file: &str,
+) -> Result<()> {
+    ws.set(file, None, render_navigation(ws.dir, snapshot, nav)?)?;
+    let css = file.replace(".tsx", ".module.css");
+    let owned = snapshot
+        .owned
+        .iter()
+        .any(|o| o.path == css && o.region.is_none());
+    if owned && ws.current(&css)?.is_some_and(|c| !c.contains(".link {")) {
+        ws.set(&css, None, emit::navigation_css())?;
+    }
+    Ok(())
+}
+
+/// Checks a placement against the model and the emitter's capability: the
+/// anchor must exist, the layout must be known, and only a vertical flow can
+/// be rendered (the home page's `HomeAbove` / `HomeBelow` stack).
+fn check_placement(
+    snapshot: &ProjectSnapshot,
+    element: &ElementId,
+    position: &Position,
+) -> std::result::Result<(), PrepareOutcome> {
+    let Some(anchor) = snapshot.element(&position.anchor) else {
+        return Err(PrepareOutcome::Conflict {
+            reason: format!("anchor {} no longer exists", position.anchor.0),
+        });
+    };
+    if &anchor.id == element {
+        return Err(PrepareOutcome::Unsupported {
+            reason: format!("{} cannot be placed relative to itself", element.0),
+        });
+    }
+    if let Err(r) = crate::place::check_position(snapshot, position.relation, anchor) {
+        return Err(PrepareOutcome::Unsupported {
+            reason: r.explanation,
+        });
+    }
+    if matches!(
+        position.relation,
+        PositionRelation::LeftOf | PositionRelation::RightOf
+    ) {
+        return Err(PrepareOutcome::Unsupported {
+            reason: "no generated container can lay out elements side by side yet".into(),
+        });
+    }
+    Ok(())
+}
+
+/// Moves `element` within `snapshot.elements` so its sibling order matches
+/// `at` (`None`: the end).
+fn reorder(snapshot: &mut ProjectSnapshot, element: &ElementId, at: Option<&Position>) {
+    let Some(from) = snapshot.elements.iter().position(|e| &e.id == element) else {
+        return;
+    };
+    let record = snapshot.elements.remove(from);
+    let index = match at {
+        None => snapshot.elements.len(),
+        Some(position) => {
+            let anchor = snapshot
+                .elements
+                .iter()
+                .position(|e| e.id == position.anchor)
+                .unwrap_or(snapshot.elements.len().saturating_sub(1));
+            match position.relation {
+                PositionRelation::Below | PositionRelation::RightOf => anchor + 1,
+                PositionRelation::Above | PositionRelation::LeftOf => anchor,
+            }
+        }
+    };
+    snapshot.elements.insert(index, record);
+}
+
+/// Rewrites the `home-flow` region of `Home.tsx` from the model: generated
+/// elements before the seeded hero render in `HomeAbove`, the rest in
+/// `HomeBelow`. Returns the reason when the region cannot be written.
+fn refresh_home_flow(ws: &mut Workspace, snapshot: &ProjectSnapshot) -> Result<Option<String>> {
+    let Some(text) = ws.current(HOME_FILE)? else {
+        return Ok(Some(format!("{HOME_FILE} is missing")));
+    };
+    if extract_region(&text, HOME_FLOW_REGION).is_none() {
+        return Ok(Some(format!(
+            "{HOME_FILE} has no protopie:begin/end {HOME_FLOW_REGION} region (the project \
+             predates page elements); add the region and the HomeAbove / HomeBelow \
+             components as in the reference template"
+        )));
+    }
+    let siblings = crate::place::flow_siblings(snapshot, DEFAULT_PAGE);
+    let hero_at = siblings
+        .iter()
+        .position(|e| e.source.as_ref().is_some_and(|s| s.file == HOME_FILE));
+    let (mut above, mut below) = (Vec::new(), Vec::new());
+    for (index, rec) in siblings.iter().enumerate() {
+        let Some(name) = component_name(rec) else {
+            continue;
+        };
+        if hero_at.is_some_and(|hero| index < hero) {
+            above.push(name);
+        } else {
+            below.push(name);
+        }
+    }
+    let body = emit::home_flow_region(&above, &below);
+    let new_text = replace_region(&text, HOME_FLOW_REGION, &body).expect("region was just found");
+    ws.set(HOME_FILE, Some(HOME_FLOW_REGION), new_text)?;
+    Ok(None)
+}
+
+/// Renders the component of a generated page element from the model.
+fn render_element(dir: &Path, snapshot: &ProjectSnapshot, id: &ElementId) -> Result<String> {
+    let rec = snapshot.element(id).expect("element is in the model");
+    let name = component_name(rec).expect("element has a component source");
+    let content = rec.content.clone().unwrap_or_default();
+    Ok(match rec.kind {
+        ElementKind::Hero => emit::hero_tsx(&name, id, &content),
+        ElementKind::Image => emit::image_tsx(&name, id, &content),
+        ElementKind::Form => emit::form_tsx(&name, id, &content),
+        ElementKind::Footer => emit::footer_tsx(&name, id, &content),
+        ElementKind::Button => {
+            let link = match rec.destination.as_ref().map(|d| link_for(snapshot, d)) {
+                None | Some(Ok(None)) => None,
+                Some(Ok(Some(link))) => Some(link),
+                Some(Err(LinkError::Missing(m) | LinkError::Invalid(m))) => {
+                    return Err(metadata_error(
+                        dir,
+                        &project::model_rel(),
+                        format!("button {} has an invalid destination: {m}", id.0),
+                    ))
+                }
+            };
+            let view = link.as_ref().map(|l| match l {
+                ResolvedLink::Internal { path, anchor } => emit::LinkView::Internal {
+                    path,
+                    anchor: anchor.as_deref(),
+                },
+                ResolvedLink::External(url) => emit::LinkView::External { url },
+            });
+            emit::button_tsx(&name, id, &content, view)
+        }
+        ElementKind::Navigation | ElementKind::NavigationItem => {
+            unreachable!("navigation is rendered by render_navigation")
+        }
+    })
 }
 
 fn note_issued(snapshot: &mut ProjectSnapshot, id: &ElementId) {
@@ -710,6 +947,19 @@ pub fn prepare(dir: &Path, plan: &Plan, conversation_id: &str) -> Result<Prepare
             Precondition::RevisionIs { revision } => snapshot.revision == *revision,
             Precondition::ElementExists { id } => snapshot.element(id).is_some(),
             Precondition::ElementAbsent { id } => snapshot.element(id).is_none(),
+            Precondition::PageExists { page } => snapshot.page_exists(page),
+            Precondition::PageAbsent { page } => !snapshot.page_exists(page),
+            Precondition::StyleValueIs {
+                id,
+                property,
+                value,
+            } => {
+                snapshot
+                    .element(id)
+                    .and_then(|e| e.style.as_ref())
+                    .and_then(|b| b.values.get(property.css_name()))
+                    == value.as_ref()
+            }
         };
         if !ok {
             return conflict(format!("precondition no longer holds: {pre:?}"));
@@ -730,17 +980,24 @@ pub fn prepare(dir: &Path, plan: &Plan, conversation_id: &str) -> Result<Prepare
         ));
     }
 
+    for id in &plan.resolves {
+        if !session.pending_questions.iter().any(|q| &q.id == id) {
+            return conflict(format!("question {id} is no longer pending"));
+        }
+    }
+
     let mut ws = Workspace {
         dir,
         files: Vec::new(),
     };
-    let mut focus = None;
+    let mut focus: Option<(ElementId, ElementKind)> = None;
     for op in &plan.operations {
         match op {
             Operation::CreateComponent {
                 id,
                 kind: ElementKind::Navigation,
                 name,
+                ..
             } => {
                 if !is_element_id(&id.0) || !is_ident(name, true) {
                     return unsupported(format!("invalid component id or name: {} / {name}", id.0));
@@ -769,15 +1026,103 @@ pub fn prepare(dir: &Path, plan: &Plan, conversation_id: &str) -> Result<Prepare
                     region: None,
                 });
                 snapshot.elements.push(e);
-                ws.set(&path, None, render_navigation(&snapshot, id)?)?;
+                ws.set(&path, None, render_navigation(dir, &snapshot, id)?)?;
                 ws.set(&css_path, None, emit::navigation_css())?;
                 note_issued(&mut snapshot, id);
-                focus = Some(id.clone());
+                focus = Some((id.clone(), ElementKind::Navigation));
+            }
+            Operation::CreateComponent {
+                id,
+                kind,
+                name,
+                content,
+            } if kind.is_flow() => {
+                let Some(content) = content else {
+                    return unsupported(format!("the {} has no content", kind.word()));
+                };
+                if !is_element_id(&id.0)
+                    || emit::element_component_name(*kind, id).as_deref() != Some(name.as_str())
+                {
+                    return unsupported(format!("invalid component id or name: {} / {name}", id.0));
+                }
+                if let Err(message) = emit::validate_content(*kind, content) {
+                    return unsupported(message);
+                }
+                if snapshot.element(id).is_some() {
+                    return conflict(format!("element id {} already exists", id.0));
+                }
+                let path = format!("src/components/{name}.tsx");
+                let css_path = format!("src/components/{name}.module.css");
+                for p in [&path, &css_path] {
+                    if let Some(owner) = snapshot
+                        .elements
+                        .iter()
+                        .find(|e| e.source.as_ref().is_some_and(|s| &s.file == p))
+                    {
+                        return conflict(format!("{p} is already owned by element {}", owner.id.0));
+                    }
+                    if snapshot.owned.iter().any(|o| &o.path == p) || ws.current(p)?.is_some() {
+                        return conflict(format!("{p} already exists or is owned"));
+                    }
+                }
+                let css = emit::element_css(*kind);
+                let class = emit::root_class(*kind);
+                let mut e = ElementRecord::new(id.clone(), *kind, DEFAULT_PAGE);
+                // A button's label is its display label (destination questions
+                // and summaries quote it).
+                e.label = (*kind == ElementKind::Button).then(|| content.text.clone()).flatten();
+                e.content = Some(content.clone());
+                e.source = Some(SourceBinding {
+                    file: path.clone(),
+                    region: None,
+                });
+                // The planner's view of what the stylesheet declares.
+                e.style = Some(StyleBinding {
+                    file: css_path.clone(),
+                    class: class.into(),
+                    region: None,
+                    scope: StyleScope::Instance,
+                    values: emit::css_declared_values(&css, &format!(".{class}")),
+                    instance_override: false,
+                });
+                e.layout = matches!(kind, ElementKind::Hero | ElementKind::Form)
+                    .then_some(ContainerLayout::Vertical);
+                if *kind == ElementKind::Button {
+                    e.destination = Some(Destination::Unresolved);
+                }
+                snapshot.elements.push(e);
+                ws.set(&path, None, render_element(dir, &snapshot, id)?)?;
+                ws.set(&css_path, None, css)?;
+                note_issued(&mut snapshot, id);
+                focus = Some((id.clone(), *kind));
             }
             Operation::InsertElement {
                 element,
                 page,
                 parent: None,
+                at,
+            } if snapshot
+                .element(element)
+                .is_some_and(|e| e.kind.is_flow()) =>
+            {
+                if page != DEFAULT_PAGE {
+                    return unsupported("only the home page can receive elements");
+                }
+                if let Some(position) = at {
+                    if let Err(outcome) = check_placement(&snapshot, element, position) {
+                        return Ok(outcome);
+                    }
+                }
+                reorder(&mut snapshot, element, at.as_ref());
+                if let Some(reason) = refresh_home_flow(&mut ws, &snapshot)? {
+                    return conflict(reason);
+                }
+            }
+            Operation::InsertElement {
+                element,
+                page,
+                parent: None,
+                ..
             } => {
                 let Some(rec) = snapshot.element(element) else {
                     return unsupported(format!("unknown element {}", element.0));
@@ -814,10 +1159,10 @@ pub fn prepare(dir: &Path, plan: &Plan, conversation_id: &str) -> Result<Prepare
                 label,
                 destination,
             } => {
-                if *destination != Destination::Unresolved {
-                    return unsupported(
-                        "linking a navigation item to a destination is not supported yet",
-                    );
+                match link_for(&snapshot, destination) {
+                    Ok(_) => {}
+                    Err(LinkError::Missing(m)) => return conflict(m),
+                    Err(LinkError::Invalid(m)) => return unsupported(m),
                 }
                 let trimmed = label.trim();
                 if trimmed.is_empty() || label.chars().count() > emit::MAX_LABEL_CHARS {
@@ -858,11 +1203,289 @@ pub fn prepare(dir: &Path, plan: &Plan, conversation_id: &str) -> Result<Prepare
                     ElementRecord::new(item.clone(), ElementKind::NavigationItem, page);
                 record.label = Some(label.clone());
                 record.parent = Some(navigation.clone());
-                record.destination = Some(Destination::Unresolved);
+                record.destination = Some(destination.clone());
                 snapshot.elements.push(record);
                 note_issued(&mut snapshot, item);
-                ws.set(&file, None, render_navigation(&snapshot, navigation)?)?;
-                focus = Some(navigation.clone());
+                refresh_navigation(&mut ws, &snapshot, navigation, &file)?;
+                focus = Some((navigation.clone(), ElementKind::Navigation));
+            }
+            Operation::MoveElement { element, position } => {
+                let Some(rec) = snapshot.element(element) else {
+                    return conflict(format!("element {} no longer exists", element.0));
+                };
+                if !rec.kind.is_flow() || rec.page != DEFAULT_PAGE || rec.parent.is_some() {
+                    return unsupported(format!("{} cannot be moved", element.0));
+                }
+                let kind = rec.kind;
+                if let Err(outcome) = check_placement(&snapshot, element, position) {
+                    return Ok(outcome);
+                }
+                reorder(&mut snapshot, element, Some(position));
+                if let Some(reason) = refresh_home_flow(&mut ws, &snapshot)? {
+                    return conflict(reason);
+                }
+                focus = Some((element.clone(), kind));
+            }
+            Operation::SetNavigationDestination { item, destination } => {
+                match link_for(&snapshot, destination) {
+                    Ok(Some(_)) => {}
+                    Ok(None) => {
+                        return unsupported(
+                            "an unresolved destination cannot be set; leave the item unlinked",
+                        )
+                    }
+                    Err(LinkError::Missing(m)) => return conflict(m),
+                    Err(LinkError::Invalid(m)) => return unsupported(m),
+                }
+                let Some(rec) = snapshot.element(item) else {
+                    return conflict(format!("navigation item {} no longer exists", item.0));
+                };
+                if rec.kind == ElementKind::Button {
+                    if rec.destination != Some(Destination::Unresolved) {
+                        return conflict(format!("button {} already has a destination", item.0));
+                    }
+                    let Some(file) = rec
+                        .source
+                        .as_ref()
+                        .filter(|s| s.region.is_none())
+                        .map(|s| s.file.clone())
+                    else {
+                        return unsupported(format!(
+                            "button {} is not a generated component",
+                            item.0
+                        ));
+                    };
+                    if !snapshot
+                        .owned
+                        .iter()
+                        .any(|o| o.path == file && o.region.is_none())
+                        || ws.current(&file)?.is_none()
+                    {
+                        return conflict(format!("{file} is missing or not owned"));
+                    }
+                    snapshot
+                        .elements
+                        .iter_mut()
+                        .find(|e| &e.id == item)
+                        .expect("button was just found")
+                        .destination = Some(destination.clone());
+                    ws.set(&file, None, render_element(dir, &snapshot, item)?)?;
+                    focus = Some((item.clone(), ElementKind::Button));
+                    continue;
+                }
+                if rec.kind != ElementKind::NavigationItem {
+                    return unsupported(format!("{} is not a navigation item", item.0));
+                }
+                if rec.destination != Some(Destination::Unresolved) {
+                    return conflict(format!(
+                        "navigation item {} already has a destination",
+                        item.0
+                    ));
+                }
+                let Some(navigation) = rec.parent.clone() else {
+                    return unsupported(format!("navigation item {} has no navigation", item.0));
+                };
+                let Some(source) = snapshot
+                    .element(&navigation)
+                    .filter(|n| n.kind == ElementKind::Navigation)
+                    .and_then(|n| n.source.as_ref())
+                    .filter(|s| s.region.is_none())
+                else {
+                    return unsupported(format!(
+                        "navigation {} is not a generated component",
+                        navigation.0
+                    ));
+                };
+                let file = source.file.clone();
+                if !snapshot
+                    .owned
+                    .iter()
+                    .any(|o| o.path == file && o.region.is_none())
+                    || ws.current(&file)?.is_none()
+                {
+                    return conflict(format!("{file} is missing or not owned"));
+                }
+                snapshot
+                    .elements
+                    .iter_mut()
+                    .find(|e| &e.id == item)
+                    .expect("item was just found")
+                    .destination = Some(destination.clone());
+                refresh_navigation(&mut ws, &snapshot, &navigation, &file)?;
+                focus = Some((navigation, ElementKind::Navigation));
+            }
+            Operation::CreatePage { page, label } => {
+                if !emit::is_valid_slug(page) || page == DEFAULT_PAGE {
+                    return unsupported(format!("invalid page id: {page}"));
+                }
+                if label.trim().is_empty() || label.chars().count() > emit::MAX_LABEL_CHARS {
+                    return unsupported(format!(
+                        "a page name must have 1 to {} characters",
+                        emit::MAX_LABEL_CHARS
+                    ));
+                }
+                let component = emit::page_component_name(page);
+                if snapshot.page_exists(page)
+                    || snapshot.pages.iter().any(|p| p.component == component)
+                {
+                    return conflict(format!("page {page} already exists"));
+                }
+                let path = format!("src/pages/{component}.tsx");
+                let css_path = format!("src/pages/{component}.module.css");
+                for p in [&path, &css_path] {
+                    if snapshot.owned.iter().any(|o| &o.path == p) || ws.current(p)?.is_some() {
+                        return conflict(format!("{p} already exists or is owned"));
+                    }
+                }
+                snapshot.pages.push(PageRecord {
+                    id: page.clone(),
+                    label: label.clone(),
+                    path: emit::page_path(page),
+                    component: component.clone(),
+                    registered: false,
+                });
+                ws.set(&path, None, emit::page_tsx(&component, page, label))?;
+                ws.set(&css_path, None, emit::page_css())?;
+            }
+            Operation::RegisterRoute { page, path } => {
+                let Some(rec) = snapshot.pages.iter_mut().find(|p| &p.id == page) else {
+                    return conflict(format!("page {page} does not exist"));
+                };
+                if &rec.path != path {
+                    return unsupported(format!(
+                        "route {path} does not match the path of page {page}"
+                    ));
+                }
+                if rec.registered {
+                    return conflict(format!("the route of page {page} is already registered"));
+                }
+                rec.registered = true;
+                let Some(text) = ws.current(ROUTER_FILE)? else {
+                    return conflict(format!("{ROUTER_FILE} is missing"));
+                };
+                if extract_region(&text, ROUTES_REGION).is_none() {
+                    return conflict(format!(
+                        "{ROUTER_FILE} has no protopie:begin/end {ROUTES_REGION} region \
+                         (the project predates page support); add the markers inside the \
+                         routes array as in the reference template"
+                    ));
+                }
+                let routes: Vec<_> = snapshot
+                    .pages
+                    .iter()
+                    .filter(|p| p.registered)
+                    .map(|p| emit::RouteView {
+                        path: &p.path,
+                        component: &p.component,
+                    })
+                    .collect();
+                let body = emit::routes_region(&routes);
+                let new_text =
+                    replace_region(&text, ROUTES_REGION, &body).expect("region was just found");
+                ws.set(ROUTER_FILE, Some(ROUTES_REGION), new_text)?;
+            }
+            Operation::SetStyle {
+                target,
+                scope,
+                edits,
+                ..
+            } => {
+                if *scope != StyleScope::Instance {
+                    return unsupported("only instance-scoped style edits are supported");
+                }
+                if edits.is_empty()
+                    || edits
+                        .iter()
+                        .any(|e| !style::is_valid_value(e.property, &e.value))
+                {
+                    return unsupported("a style edit is empty or outside the style policy");
+                }
+                for (i, e) in edits.iter().enumerate() {
+                    if edits[..i].iter().any(|p| p.property == e.property) {
+                        return unsupported("a style property is edited twice");
+                    }
+                }
+                let Some(rec) = snapshot.element(target) else {
+                    return conflict(format!("element {} no longer exists", target.0));
+                };
+                let kind = rec.kind;
+                let Some(binding) = rec.style.clone() else {
+                    return unsupported(format!("element {} has no style binding", target.0));
+                };
+                if !is_element_id(&target.0) || !emit::is_css_class(&binding.class) {
+                    return unsupported(format!("invalid style binding of {}", target.0));
+                }
+                if !snapshot
+                    .owned
+                    .iter()
+                    .any(|o| o.path == binding.file && o.region == binding.region)
+                {
+                    return conflict(format!(
+                        "{} ({}) is not owned by the agent",
+                        binding.file,
+                        binding.region.as_deref().unwrap_or("whole file")
+                    ));
+                }
+                let Some(text) = ws.current(&binding.file)? else {
+                    return conflict(format!("{} is missing", binding.file));
+                };
+                let body = match &binding.region {
+                    Some(r) => match extract_region(&text, r) {
+                        Some(b) => b,
+                        None => return conflict(format!("{} lost its {r} markers", binding.file)),
+                    },
+                    None => text.clone(),
+                };
+                let pairs: Vec<(&str, &str)> = edits
+                    .iter()
+                    .map(|e| (e.property.css_name(), e.value.as_str()))
+                    .collect();
+                // A shared (definition) class is never edited for one instance:
+                // the instance gets its own more specific rule instead.
+                let creating = binding.scope == StyleScope::Definition;
+                let new_body = if creating {
+                    emit::css_append_rule(
+                        &body,
+                        &emit::instance_selector(&binding.class, target),
+                        &pairs,
+                    )
+                } else {
+                    let selector = if binding.instance_override {
+                        emit::instance_selector(&binding.class, target)
+                    } else {
+                        format!(".{}", binding.class)
+                    };
+                    match emit::css_set_declarations(&body, &selector, &pairs) {
+                        Some(b) => b,
+                        None => {
+                            return conflict(format!(
+                                "rule {selector} was not found in {}",
+                                binding.file
+                            ))
+                        }
+                    }
+                };
+                let new_text = match &binding.region {
+                    Some(r) => replace_region(&text, r, &new_body).expect("region was just found"),
+                    None => new_body,
+                };
+                ws.set(&binding.file, binding.region.as_deref(), new_text)?;
+                let rec = snapshot
+                    .elements
+                    .iter_mut()
+                    .find(|e| &e.id == target)
+                    .expect("element was just found");
+                let style = rec.style.as_mut().expect("binding was just found");
+                if creating {
+                    style.scope = StyleScope::Instance;
+                    style.instance_override = true;
+                }
+                for e in edits {
+                    style
+                        .values
+                        .insert(e.property.css_name().to_string(), e.value.clone());
+                }
+                focus = Some((target.clone(), kind));
             }
             other => return unsupported(format!("operation not supported yet: {other:?}")),
         }
@@ -891,9 +1514,20 @@ pub fn prepare(dir: &Path, plan: &Plan, conversation_id: &str) -> Result<Prepare
     }
     snapshot.revision += 1;
     session.advance_turn();
-    if let Some(id) = &focus {
-        session.record_success(id.clone(), ElementKind::Navigation);
+    if let Some((id, kind)) = &focus {
+        session.record_success(id.clone(), *kind);
     }
+    session
+        .pending_questions
+        .retain(|q| !plan.resolves.contains(&q.id));
+    // Questions about items that were deleted or got a destination are stale.
+    session.pending_questions.retain(|q| {
+        q.continuation.item().map_or(true, |id| {
+            snapshot.element(id).is_some_and(|e| {
+                e.kind.has_destination() && e.destination == Some(Destination::Unresolved)
+            })
+        })
+    });
     for q in &plan.follow_up {
         session.add_pending(q.clone());
     }

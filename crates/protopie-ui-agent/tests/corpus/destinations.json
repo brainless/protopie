@@ -1,0 +1,1239 @@
+[
+  {
+    "name": "new page by label",
+    "turns": [
+      {
+        "say": "Need a top navigation",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1"
+        }
+      },
+      {
+        "say": "Add Contact Us",
+        "expect": {
+          "outcome": "applied",
+          "pending": 1,
+          "questions": [
+            "Contact Us"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "{\"Contact Us\"}"
+              ],
+              "lacks": [
+                "href"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "say": "new page",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1",
+          "reply_contains": [
+            "Created the Contact Us page (/contact-us)",
+            "Linked"
+          ],
+          "changed_files": [
+            "src/pages/ContactUsPage.tsx",
+            "src/pages/ContactUsPage.module.css",
+            "src/router.ts",
+            "src/components/TopNav.tsx"
+          ],
+          "files": {
+            "src/router.ts": {
+              "contains": [
+                "path: \"/contact-us\"",
+                "import(\"./pages/ContactUsPage\")",
+                "lazy(() => import(\"./pages/Home\"))"
+              ]
+            },
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "href={\"/contact-us\"}",
+                "{\"Contact Us\"}"
+              ]
+            },
+            "src/pages/ContactUsPage.tsx": {
+              "contains": [
+                "{\"Contact Us\"}",
+                "export default function ContactUsPage"
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "new page by number",
+    "turns": [
+      {
+        "say": "Need a top navigation",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1"
+        }
+      },
+      {
+        "say": "Add Contact Us",
+        "expect": {
+          "outcome": "applied",
+          "pending": 1,
+          "questions": [
+            "Contact Us"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "{\"Contact Us\"}"
+              ],
+              "lacks": [
+                "href"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "say": "1",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1",
+          "reply_contains": [
+            "Created the Contact Us page (/contact-us)",
+            "Linked"
+          ],
+          "changed_files": [
+            "src/pages/ContactUsPage.tsx",
+            "src/pages/ContactUsPage.module.css",
+            "src/router.ts",
+            "src/components/TopNav.tsx"
+          ],
+          "files": {
+            "src/router.ts": {
+              "contains": [
+                "path: \"/contact-us\"",
+                "import(\"./pages/ContactUsPage\")",
+                "lazy(() => import(\"./pages/Home\"))"
+              ]
+            },
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "href={\"/contact-us\"}",
+                "{\"Contact Us\"}"
+              ]
+            },
+            "src/pages/ContactUsPage.tsx": {
+              "contains": [
+                "{\"Contact Us\"}",
+                "export default function ContactUsPage"
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "new page by option label with article and punctuation",
+    "turns": [
+      {
+        "say": "Need a top navigation",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1"
+        }
+      },
+      {
+        "say": "Add Contact Us",
+        "expect": {
+          "outcome": "applied",
+          "pending": 1,
+          "questions": [
+            "Contact Us"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "{\"Contact Us\"}"
+              ],
+              "lacks": [
+                "href"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "say": "A new page.",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1",
+          "reply_contains": [
+            "Created the Contact Us page (/contact-us)",
+            "Linked"
+          ],
+          "changed_files": [
+            "src/pages/ContactUsPage.tsx",
+            "src/pages/ContactUsPage.module.css",
+            "src/router.ts",
+            "src/components/TopNav.tsx"
+          ],
+          "files": {
+            "src/router.ts": {
+              "contains": [
+                "path: \"/contact-us\"",
+                "import(\"./pages/ContactUsPage\")",
+                "lazy(() => import(\"./pages/Home\"))"
+              ]
+            },
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "href={\"/contact-us\"}",
+                "{\"Contact Us\"}"
+              ]
+            },
+            "src/pages/ContactUsPage.tsx": {
+              "contains": [
+                "{\"Contact Us\"}",
+                "export default function ContactUsPage"
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "new page by structured answer",
+    "turns": [
+      {
+        "say": "Need a top navigation",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1"
+        }
+      },
+      {
+        "say": "Add Contact Us",
+        "expect": {
+          "outcome": "applied",
+          "pending": 1,
+          "questions": [
+            "Contact Us"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "{\"Contact Us\"}"
+              ],
+              "lacks": [
+                "href"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "answer": {
+          "question": "destination",
+          "option": "new_page"
+        },
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1",
+          "reply_contains": [
+            "Created the Contact Us page (/contact-us)",
+            "Linked"
+          ],
+          "changed_files": [
+            "src/pages/ContactUsPage.tsx",
+            "src/pages/ContactUsPage.module.css",
+            "src/router.ts",
+            "src/components/TopNav.tsx"
+          ],
+          "files": {
+            "src/router.ts": {
+              "contains": [
+                "path: \"/contact-us\"",
+                "import(\"./pages/ContactUsPage\")",
+                "lazy(() => import(\"./pages/Home\"))"
+              ]
+            },
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "href={\"/contact-us\"}",
+                "{\"Contact Us\"}"
+              ]
+            },
+            "src/pages/ContactUsPage.tsx": {
+              "contains": [
+                "{\"Contact Us\"}",
+                "export default function ContactUsPage"
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "new page addressed by question id",
+    "turns": [
+      {
+        "say": "Need a top navigation",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1"
+        }
+      },
+      {
+        "say": "Add Contact Us",
+        "expect": {
+          "outcome": "applied",
+          "pending": 1,
+          "questions": [
+            "Contact Us"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "{\"Contact Us\"}"
+              ],
+              "lacks": [
+                "href"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "say": "q1-destination: 1",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1",
+          "reply_contains": [
+            "Created the Contact Us page (/contact-us)",
+            "Linked"
+          ],
+          "changed_files": [
+            "src/pages/ContactUsPage.tsx",
+            "src/pages/ContactUsPage.module.css",
+            "src/router.ts",
+            "src/components/TopNav.tsx"
+          ],
+          "files": {
+            "src/router.ts": {
+              "contains": [
+                "path: \"/contact-us\"",
+                "import(\"./pages/ContactUsPage\")",
+                "lazy(() => import(\"./pages/Home\"))"
+              ]
+            },
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "href={\"/contact-us\"}",
+                "{\"Contact Us\"}"
+              ]
+            },
+            "src/pages/ContactUsPage.tsx": {
+              "contains": [
+                "{\"Contact Us\"}",
+                "export default function ContactUsPage"
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "leave unlinked creates nothing",
+    "turns": [
+      {
+        "say": "Need a top navigation",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1"
+        }
+      },
+      {
+        "say": "Add Contact Us",
+        "expect": {
+          "outcome": "applied",
+          "pending": 1,
+          "questions": [
+            "Contact Us"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "{\"Contact Us\"}"
+              ],
+              "lacks": [
+                "href"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "say": "Leave unlinked",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "reply_contains": [
+            "unlinked"
+          ],
+          "changed_files": [],
+          "absent": [
+            "src/pages/ContactUsPage.tsx"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "{\"Contact Us\"}"
+              ],
+              "lacks": [
+                "href"
+              ]
+            },
+            "src/router.ts": {
+              "lacks": [
+                "contact"
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "existing page",
+    "turns": [
+      {
+        "say": "Need a top navigation",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1"
+        }
+      },
+      {
+        "say": "Add Contact Us",
+        "expect": {
+          "outcome": "applied",
+          "pending": 1,
+          "questions": [
+            "Contact Us"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "{\"Contact Us\"}"
+              ],
+              "lacks": [
+                "href"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "say": "2",
+        "expect": {
+          "outcome": "needs_clarification",
+          "pending": 1,
+          "questions": [
+            "Which page or section"
+          ]
+        }
+      },
+      {
+        "say": "1",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "reply_contains": [
+            "Linked",
+            "to /."
+          ],
+          "changed_files": [
+            "src/components/TopNav.tsx"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "href={\"/\"}"
+              ]
+            },
+            "src/router.ts": {
+              "lacks": [
+                "contact"
+              ]
+            }
+          },
+          "absent": [
+            "src/pages/ContactUsPage.tsx"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "existing section",
+    "turns": [
+      {
+        "say": "Need a top navigation",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1"
+        }
+      },
+      {
+        "say": "Add Contact Us",
+        "expect": {
+          "outcome": "applied",
+          "pending": 1,
+          "questions": [
+            "Contact Us"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "{\"Contact Us\"}"
+              ],
+              "lacks": [
+                "href"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "say": "An existing page or section",
+        "expect": {
+          "outcome": "needs_clarification",
+          "pending": 1,
+          "questions": [
+            "Which page or section"
+          ]
+        }
+      },
+      {
+        "say": "2",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "href={\"/#hero_1\"}"
+              ]
+            }
+          },
+          "absent": [
+            "src/pages/ContactUsPage.tsx"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "external url",
+    "turns": [
+      {
+        "say": "Need a top navigation",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1"
+        }
+      },
+      {
+        "say": "Add Contact Us",
+        "expect": {
+          "outcome": "applied",
+          "pending": 1,
+          "questions": [
+            "Contact Us"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "{\"Contact Us\"}"
+              ],
+              "lacks": [
+                "href"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "say": "3",
+        "expect": {
+          "outcome": "needs_clarification",
+          "pending": 1,
+          "questions": [
+            "What URL"
+          ]
+        }
+      },
+      {
+        "say": "not a url",
+        "expect": {
+          "outcome": "needs_clarification",
+          "pending": 1,
+          "questions": [
+            "not a valid http(s) URL"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "lacks": [
+                "href"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "say": "javascript:alert(1)",
+        "expect": {
+          "outcome": "needs_clarification",
+          "pending": 1,
+          "questions": [
+            "not a valid http(s) URL"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "lacks": [
+                "href"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "say": "https://example.com/contact",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "changed_files": [
+            "src/components/TopNav.tsx"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "href={\"https://example.com/contact\"} rel=\"noopener noreferrer\""
+              ]
+            },
+            "src/router.ts": {
+              "lacks": [
+                "contact"
+              ]
+            }
+          },
+          "absent": [
+            "src/pages/ContactUsPage.tsx"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "ambiguous bare answers are rejected",
+    "turns": [
+      {
+        "say": "Need a top navigation",
+        "expect": {
+          "outcome": "applied"
+        }
+      },
+      {
+        "say": "Add Contact Us",
+        "expect": {
+          "outcome": "applied",
+          "pending": 1
+        }
+      },
+      {
+        "say": "Add Get in Touch",
+        "expect": {
+          "outcome": "applied",
+          "pending": 2
+        }
+      },
+      {
+        "say": "1",
+        "expect": {
+          "outcome": "needs_clarification",
+          "pending": 2,
+          "reply_contains": [
+            "More than one question",
+            "q1-destination",
+            "q2-destination"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "lacks": [
+                "href"
+              ]
+            }
+          },
+          "absent": [
+            "src/pages/ContactUsPage.tsx"
+          ]
+        }
+      },
+      {
+        "say": "Leave unlinked",
+        "expect": {
+          "outcome": "needs_clarification",
+          "pending": 2
+        }
+      },
+      {
+        "say": "q2-destination: new page",
+        "expect": {
+          "outcome": "applied",
+          "pending": 1,
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "href={\"/get-in-touch\"}"
+              ]
+            }
+          },
+          "absent": [
+            "src/pages/ContactUsPage.tsx"
+          ]
+        }
+      },
+      {
+        "say": "1",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "href={\"/contact-us\"}"
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "stale answers are rejected",
+    "turns": [
+      {
+        "say": "Need a top navigation",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1"
+        }
+      },
+      {
+        "say": "Add Contact Us",
+        "expect": {
+          "outcome": "applied",
+          "pending": 1,
+          "questions": [
+            "Contact Us"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "{\"Contact Us\"}"
+              ],
+              "lacks": [
+                "href"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "say": "new page",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1",
+          "reply_contains": [
+            "Created the Contact Us page (/contact-us)",
+            "Linked"
+          ],
+          "changed_files": [
+            "src/pages/ContactUsPage.tsx",
+            "src/pages/ContactUsPage.module.css",
+            "src/router.ts",
+            "src/components/TopNav.tsx"
+          ],
+          "files": {
+            "src/router.ts": {
+              "contains": [
+                "path: \"/contact-us\"",
+                "import(\"./pages/ContactUsPage\")",
+                "lazy(() => import(\"./pages/Home\"))"
+              ]
+            },
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "href={\"/contact-us\"}",
+                "{\"Contact Us\"}"
+              ]
+            },
+            "src/pages/ContactUsPage.tsx": {
+              "contains": [
+                "{\"Contact Us\"}",
+                "export default function ContactUsPage"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "say": "q1-destination: unlinked",
+        "expect": {
+          "outcome": "conflict",
+          "pending": 0,
+          "reply_contains": [
+            "not pending"
+          ]
+        }
+      },
+      {
+        "say": "1",
+        "expect": {
+          "outcome": "unsupported",
+          "pending": 0
+        }
+      }
+    ]
+  },
+  {
+    "name": "path collision asks and can reuse the existing page",
+    "turns": [
+      {
+        "say": "Add a Contact Us page",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "reply_contains": [
+            "Created the Contact Us page (/contact-us)"
+          ],
+          "changed_files": [
+            "src/pages/ContactUsPage.tsx",
+            "src/pages/ContactUsPage.module.css",
+            "src/router.ts"
+          ]
+        }
+      },
+      {
+        "say": "Need a top navigation",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1"
+        }
+      },
+      {
+        "say": "Add Contact Us",
+        "expect": {
+          "outcome": "applied",
+          "pending": 1,
+          "questions": [
+            "Contact Us"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "{\"Contact Us\"}"
+              ],
+              "lacks": [
+                "href"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "say": "new page",
+        "expect": {
+          "outcome": "needs_clarification",
+          "pending": 1,
+          "questions": [
+            "already exists"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "lacks": [
+                "href"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "say": "1",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "changed_files": [
+            "src/components/TopNav.tsx"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "href={\"/contact-us\"}"
+              ]
+            }
+          },
+          "absent": [
+            "src/pages/ContactUs2Page.tsx"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "path collision can create an alternative page",
+    "turns": [
+      {
+        "say": "Add a Contact Us page",
+        "expect": {
+          "outcome": "applied"
+        }
+      },
+      {
+        "say": "Need a top navigation",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1"
+        }
+      },
+      {
+        "say": "Add Contact Us",
+        "expect": {
+          "outcome": "applied",
+          "pending": 1,
+          "questions": [
+            "Contact Us"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "{\"Contact Us\"}"
+              ],
+              "lacks": [
+                "href"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "say": "new page",
+        "expect": {
+          "outcome": "needs_clarification",
+          "pending": 1,
+          "questions": [
+            "already exists"
+          ]
+        }
+      },
+      {
+        "say": "2",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1",
+          "reply_contains": [
+            "Created the Contact Us page (/contact-us-2)",
+            "Linked"
+          ],
+          "changed_files": [
+            "src/pages/ContactUs2Page.tsx",
+            "src/pages/ContactUs2Page.module.css",
+            "src/router.ts",
+            "src/components/TopNav.tsx"
+          ],
+          "files": {
+            "src/router.ts": {
+              "contains": [
+                "path: \"/contact-us-2\"",
+                "import(\"./pages/ContactUs2Page\")",
+                "lazy(() => import(\"./pages/Home\"))"
+              ]
+            },
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "href={\"/contact-us-2\"}",
+                "{\"Contact Us\"}"
+              ]
+            },
+            "src/pages/ContactUs2Page.tsx": {
+              "contains": [
+                "{\"Contact Us\"}",
+                "export default function ContactUs2Page"
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "direct page creation is ensure-style and creates no link",
+    "turns": [
+      {
+        "say": "Add a Contact Us page",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "changed_files": [
+            "src/pages/ContactUsPage.tsx",
+            "src/pages/ContactUsPage.module.css",
+            "src/router.ts"
+          ],
+          "files": {
+            "src/router.ts": {
+              "contains": [
+                "path: \"/contact-us\""
+              ]
+            },
+            "src/pages/ContactUsPage.tsx": {
+              "contains": [
+                "{\"Contact Us\"}"
+              ]
+            }
+          },
+          "absent": [
+            "src/components/TopNav.tsx"
+          ]
+        }
+      },
+      {
+        "say": "Add a Contact Us page",
+        "expect": {
+          "outcome": "no_change",
+          "reply_contains": [
+            "already exists"
+          ]
+        }
+      },
+      {
+        "say": "add a contact us page",
+        "expect": {
+          "outcome": "no_change"
+        }
+      },
+      {
+        "say": "Add a Home page",
+        "expect": {
+          "outcome": "no_change",
+          "reply_contains": [
+            "already exists"
+          ]
+        }
+      },
+      {
+        "say": "Add a \"Terms of Use\" page",
+        "expect": {
+          "outcome": "applied",
+          "files": {
+            "src/router.ts": {
+              "contains": [
+                "path: \"/terms-of-use\"",
+                "path: \"/contact-us\""
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "unusable label asks for a page name",
+    "turns": [
+      {
+        "say": "Need a top navigation",
+        "expect": {
+          "outcome": "applied"
+        }
+      },
+      {
+        "say": "Add \"???\" to top nav",
+        "expect": {
+          "outcome": "applied",
+          "pending": 1
+        }
+      },
+      {
+        "say": "new page",
+        "expect": {
+          "outcome": "needs_clarification",
+          "pending": 1,
+          "reply_contains": [
+            "called"
+          ],
+          "questions": [
+            "cannot be derived"
+          ]
+        }
+      },
+      {
+        "say": "???",
+        "expect": {
+          "outcome": "needs_clarification",
+          "pending": 1,
+          "questions": [
+            "cannot be derived"
+          ]
+        }
+      },
+      {
+        "say": "Our Team",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "files": {
+            "src/router.ts": {
+              "contains": [
+                "path: \"/our-team\""
+              ]
+            },
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "href={\"/our-team\"}",
+                "{\"???\"}"
+              ]
+            },
+            "src/pages/OurTeamPage.tsx": {
+              "contains": [
+                "{\"Our Team\"}"
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "dry run answers preview and keep the question",
+    "turns": [
+      {
+        "say": "Need a top navigation",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1"
+        }
+      },
+      {
+        "say": "Add Contact Us",
+        "expect": {
+          "outcome": "applied",
+          "pending": 1,
+          "questions": [
+            "Contact Us"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "{\"Contact Us\"}"
+              ],
+              "lacks": [
+                "href"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "say": "new page",
+        "dry_run": true,
+        "expect": {
+          "outcome": "preview",
+          "pending": 1,
+          "absent": [
+            "src/pages/ContactUsPage.tsx"
+          ],
+          "files": {
+            "src/components/TopNav.tsx": {
+              "lacks": [
+                "href"
+              ]
+            },
+            "src/router.ts": {
+              "lacks": [
+                "contact"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "say": "new page",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "nav_1",
+          "reply_contains": [
+            "Created the Contact Us page (/contact-us)",
+            "Linked"
+          ],
+          "changed_files": [
+            "src/pages/ContactUsPage.tsx",
+            "src/pages/ContactUsPage.module.css",
+            "src/router.ts",
+            "src/components/TopNav.tsx"
+          ],
+          "files": {
+            "src/router.ts": {
+              "contains": [
+                "path: \"/contact-us\"",
+                "import(\"./pages/ContactUsPage\")",
+                "lazy(() => import(\"./pages/Home\"))"
+              ]
+            },
+            "src/components/TopNav.tsx": {
+              "contains": [
+                "href={\"/contact-us\"}",
+                "{\"Contact Us\"}"
+              ]
+            },
+            "src/pages/ContactUsPage.tsx": {
+              "contains": [
+                "{\"Contact Us\"}",
+                "export default function ContactUsPage"
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+]

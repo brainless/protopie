@@ -9,12 +9,15 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+pub mod answer;
 pub mod apply;
 pub mod contracts;
 pub mod emit;
 pub mod parser;
 pub mod pipeline;
+pub mod place;
 pub mod project;
+pub mod style;
 
 use contracts::{ModifyOutcome, ModifyResult, PlanOutcome, Rejection, RejectionReason};
 
@@ -191,26 +194,126 @@ pub fn modify(project_path: &Path, command: &str) -> Result<ModifyResult> {
     modify_with(project_path, command, &ModifyOptions::default())
 }
 
-fn applied_summary(plan: &contracts::Plan) -> String {
+fn destination_text(destination: &contracts::Destination) -> String {
+    use contracts::Destination as D;
+    match destination {
+        D::Unresolved => "nowhere yet".into(),
+        D::Page { page } if page == contracts::DEFAULT_PAGE => contracts::HOME_PATH.into(),
+        D::Page { page } => emit::page_path(page),
+        D::Section { page, section } if page == contracts::DEFAULT_PAGE => {
+            format!("{}#{section}", contracts::HOME_PATH)
+        }
+        D::Section { page, section } => format!("{}#{section}", emit::page_path(page)),
+        D::External { url } => url.clone(),
+    }
+}
+
+fn applied_summary(plan: &contracts::Plan, project: Option<&contracts::ProjectSnapshot>) -> String {
     use contracts::Operation as Op;
     let parts: Vec<String> = plan
         .operations
         .iter()
         .filter_map(|op| match op {
-            Op::CreateComponent { id, .. } => Some(format!("Added a top navigation ({}).", id.0)),
-            Op::AddNavigationItem {
-                navigation, label, ..
+            Op::CreateComponent {
+                id,
+                kind: contracts::ElementKind::Navigation,
+                ..
+            } => Some(format!("Added a top navigation ({}).", id.0)),
+            Op::CreateComponent { id, kind, .. } => Some(match kind {
+                contracts::ElementKind::Form => format!(
+                    "Added a form ({}). Submitting it does nothing yet: no destination was given.",
+                    id.0
+                ),
+                _ => format!("Added a {} ({}).", kind.word(), id.0),
+            }),
+            Op::InsertElement {
+                element,
+                at: Some(position),
+                ..
             } => Some(format!(
-                "Added \u{201c}{label}\u{201d} to {} (not linked yet).",
-                navigation.0
+                "Placed {} {} {}.",
+                element.0,
+                place::relation_text(position.relation),
+                position.anchor.0
             )),
+            Op::MoveElement { element, position } => Some(format!(
+                "Moved {} {} {}.",
+                element.0,
+                place::relation_text(position.relation),
+                position.anchor.0
+            )),
+            Op::AddNavigationItem {
+                navigation,
+                label,
+                destination,
+                ..
+            } => Some(match destination {
+                contracts::Destination::Unresolved => format!(
+                    "Added \u{201c}{label}\u{201d} to {} (not linked yet).",
+                    navigation.0
+                ),
+                d => format!(
+                    "Added \u{201c}{label}\u{201d} to {}, linked to {}.",
+                    navigation.0,
+                    destination_text(d)
+                ),
+            }),
+            Op::CreatePage { page, label } => Some(format!(
+                "Created the {label} page ({}).",
+                emit::page_path(page)
+            )),
+            Op::RegisterRoute { path, .. } => Some(format!("Registered the route {path}.")),
+            Op::SetNavigationDestination { item, destination } => {
+                let label = project
+                    .and_then(|p| p.element(item))
+                    .and_then(|e| e.label.clone())
+                    .unwrap_or_else(|| item.0.clone());
+                Some(format!(
+                    "Linked \u{201c}{label}\u{201d} to {}.",
+                    destination_text(destination)
+                ))
+            }
+            Op::SetStyle {
+                target,
+                change,
+                edits,
+                ..
+            } => {
+                let css = edits
+                    .iter()
+                    .map(|e| format!("{}: {}", e.property.css_name(), e.value))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                Some(match change {
+                    contracts::StyleChange::RoundedCorners => {
+                        format!("Rounded the corners of {} ({css}).", target.0)
+                    }
+                    contracts::StyleChange::FullWidth => {
+                        format!("Made {} full width ({css}).", target.0)
+                    }
+                    contracts::StyleChange::Padding(parser::PaddingChange::Increase) => {
+                        format!("Increased the padding of {} ({css}).", target.0)
+                    }
+                    contracts::StyleChange::Padding(parser::PaddingChange::Decrease) => {
+                        format!("Decreased the padding of {} ({css}).", target.0)
+                    }
+                })
+            }
             _ => None,
         })
         .collect();
-    if parts.is_empty() {
-        "Applied the change.".into()
-    } else {
+    if !parts.is_empty() {
         parts.join(" ")
+    } else if !plan.follow_up.is_empty() {
+        plan.follow_up
+            .iter()
+            .map(|q| q.prompt.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else if !plan.resolves.is_empty() {
+        "Okay, left it unlinked; it stays as plain text.".into()
+    } else {
+        "Applied the change.".into()
     }
 }
 
@@ -218,10 +321,27 @@ fn applied_result(
     plan_id: String,
     changed_files: Vec<String>,
     plan: Option<&contracts::Plan>,
+    project: Option<&contracts::ProjectSnapshot>,
     summary_suffix: &str,
 ) -> ModifyResult {
+    use contracts::QuestionKind;
+    // A conversation-only step that asks the next required question is a
+    // clarification, not an edit.
+    if let Some(plan) = plan.filter(|p| {
+        p.operations.is_empty()
+            && p.follow_up
+                .iter()
+                .any(|q| q.kind == QuestionKind::BlockingClarification)
+    }) {
+        return ModifyResult {
+            summary: applied_summary(plan, project) + summary_suffix,
+            outcome: ModifyOutcome::NeedsClarification {
+                questions: plan.follow_up.clone(),
+            },
+        };
+    }
     let summary = match plan {
-        Some(plan) => applied_summary(plan),
+        Some(plan) => applied_summary(plan, project),
         None => "Applied the change.".into(),
     } + summary_suffix;
     ModifyResult {
@@ -241,7 +361,33 @@ fn conflict_result(reason: String) -> ModifyResult {
     }
 }
 
+fn questions_summary(questions: &[contracts::Question]) -> String {
+    if let [only] = questions {
+        return only.prompt.clone();
+    }
+    let mut text = String::from(
+        "More than one question is waiting. Answer one as \u{201c}<question id>: <answer>\u{201d}:",
+    );
+    for q in questions {
+        text.push_str(&format!("\n- {}: {}", q.id, q.prompt));
+    }
+    text
+}
+
+fn loaded_snapshot(project_path: &Path) -> Option<contracts::ProjectSnapshot> {
+    match project::load_project(project_path) {
+        Ok(project::ProjectState::Loaded(s)) => Some(s),
+        _ => None,
+    }
+}
+
 /// Interprets `command` for the project at `project_path`.
+///
+/// A message that answers a pending question (an option number or label,
+/// `yes` / `no`, free text for the only text question, or
+/// `<question id>: <answer>`) is routed to [`answer::plan_answer`] when exactly
+/// one pending question can take it; an ambiguous reply asks which question is
+/// meant. Anything else is parsed as a new command.
 ///
 /// Loads `.protopie/` state (model and conversation) and runs the pure
 /// parse/resolve/plan pipeline. A ready plan is applied through
@@ -254,6 +400,45 @@ pub fn modify_with(
     project_path: &Path,
     command: &str,
     options: &ModifyOptions,
+) -> Result<ModifyResult> {
+    run_request(
+        project_path,
+        command,
+        options,
+        |project, session| match answer::interpret_bare(command, project, session) {
+            answer::BareAnswer::Answer(a) => answer::plan_answer(&a, project, session),
+            answer::BareAnswer::Ambiguous(questions) => {
+                PlanOutcome::NeedsClarification { questions }
+            }
+            answer::BareAnswer::NotAnAnswer => pipeline::plan_prompt(command, project, session),
+        },
+    )
+}
+
+/// Applies a structured answer to a pending question of the conversation. The
+/// question must still be pending and its target unchanged; otherwise the
+/// result is a conflict and nothing is written. Honors `request_id` (retries
+/// replay) and `dry_run` like [`modify_with`].
+pub fn answer_with(
+    project_path: &Path,
+    answer: &contracts::Answer,
+    options: &ModifyOptions,
+) -> Result<ModifyResult> {
+    let key = format!(
+        "answer {} {}",
+        answer.question_id,
+        serde_json::to_string(&answer.choice).expect("answers serialize")
+    );
+    run_request(project_path, &key, options, |project, session| {
+        answer::plan_answer(answer, project, session)
+    })
+}
+
+fn run_request(
+    project_path: &Path,
+    command: &str,
+    options: &ModifyOptions,
+    plan_with: impl FnOnce(&contracts::ProjectSnapshot, &contracts::Session) -> PlanOutcome,
 ) -> Result<ModifyResult> {
     if !project_path.is_dir() {
         return Err(Error::NotADirectory(project_path.to_path_buf()));
@@ -284,6 +469,7 @@ pub fn modify_with(
                 record.plan_id,
                 record.changed_files,
                 record.plan.as_ref(),
+                loaded_snapshot(project_path).as_ref(),
                 " (already applied)",
             ));
         }
@@ -306,28 +492,42 @@ pub fn modify_with(
         }
     };
     let session = project::load_session(project_path, conversation_id)?;
-    let outcome = pipeline::plan_prompt(command, &snapshot, &session);
+    let outcome = plan_with(&snapshot, &session);
     Ok(match outcome {
         PlanOutcome::Unsupported { rejection } => ModifyResult {
             summary: format!("received: {command}"),
             outcome: ModifyOutcome::Unsupported { rejection },
         },
         PlanOutcome::NeedsClarification { questions } => ModifyResult {
-            summary: questions
-                .iter()
-                .map(|q| q.prompt.as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
+            summary: questions_summary(&questions),
             outcome: ModifyOutcome::NeedsClarification { questions },
         },
         PlanOutcome::NoChange { reason, follow_up } => ModifyResult {
             summary: reason.clone(),
             outcome: ModifyOutcome::NoChange { reason, follow_up },
         },
+        PlanOutcome::Conflict { reason } => conflict_result(reason),
+        // A conversation-only step that just asks a blocking question: a dry
+        // run reports the question and leaves the pending list untouched.
+        PlanOutcome::Ready { plan }
+            if options.dry_run
+                && plan.operations.is_empty()
+                && plan
+                    .follow_up
+                    .iter()
+                    .any(|q| q.kind == contracts::QuestionKind::BlockingClarification) =>
+        {
+            ModifyResult {
+                summary: questions_summary(&plan.follow_up),
+                outcome: ModifyOutcome::NeedsClarification {
+                    questions: plan.follow_up,
+                },
+            }
+        }
         PlanOutcome::Ready { plan } if options.dry_run => {
             match apply::prepare(project_path, &plan, conversation_id)? {
                 apply::PrepareOutcome::Ready(prepared) => ModifyResult {
-                    summary: format!("Preview: {}", applied_summary(&plan)),
+                    summary: format!("Preview: {}", applied_summary(&plan, Some(&snapshot))),
                     outcome: ModifyOutcome::Preview {
                         plan_id: plan.id.clone(),
                         changed_files: prepared.files.iter().map(|f| f.path.clone()).collect(),
@@ -347,13 +547,18 @@ pub fn modify_with(
                 ..Default::default()
             };
             match apply::apply_plan(project_path, conversation_id, &plan, &apply_options)? {
-                apply::ApplyOutcome::Applied(record) => {
-                    applied_result(record.plan_id, record.changed_files, Some(&plan), "")
-                }
+                apply::ApplyOutcome::Applied(record) => applied_result(
+                    record.plan_id,
+                    record.changed_files,
+                    Some(&plan),
+                    Some(&snapshot),
+                    "",
+                ),
                 apply::ApplyOutcome::Replayed(record) => applied_result(
                     record.plan_id,
                     record.changed_files,
                     Some(&plan),
+                    Some(&snapshot),
                     " (already applied)",
                 ),
                 apply::ApplyOutcome::Conflict { reason } => conflict_result(reason),

@@ -1,0 +1,145 @@
+[
+  {
+    "name": "form below hero: content is asked for, never invented",
+    "turns": [
+      {
+        "say": "add a form below hero",
+        "expect": {
+          "outcome": "needs_clarification",
+          "questions": ["Which fields"],
+          "pending": 1,
+          "absent": ["src/components/Form1.tsx"]
+        }
+      },
+      {
+        "say": "Name, Email, Message",
+        "expect": {
+          "outcome": "needs_clarification",
+          "questions": ["submit button say"],
+          "pending": 1,
+          "absent": ["src/components/Form1.tsx"]
+        }
+      },
+      {
+        "answer": { "question": "content-submit-label", "text": "Get a callback" },
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "focus": "form_1",
+          "changed_files": [
+            "src/components/Form1.tsx",
+            "src/components/Form1.module.css",
+            "src/pages/Home.tsx"
+          ],
+          "reply_contains": ["Added a form (form_1)", "below hero_1"],
+          "files": {
+            "src/components/Form1.tsx": {
+              "contains": ["data-protopie-id=\"form_1\"", "{\"Get a callback\"}", "{\"Message\"}"],
+              "lacks": ["action=", "fetch("]
+            },
+            "src/pages/Home.tsx": {
+              "contains": ["import Form1 from \"../components/Form1\";", "<Form1 />", "protopie:begin hero_1"]
+            }
+          }
+        }
+      },
+      {
+        "say": "Give the form below hero more padding",
+        "expect": {
+          "outcome": "applied",
+          "changed_files": ["src/components/Form1.module.css"],
+          "files": {
+            "src/components/Form1.module.css": {
+              "contains": ["padding: var(--space-7) var(--space-5);"]
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "button: label inline, destination asked after, nothing invented",
+    "turns": [
+      {
+        "say": "Add a button called Get in Touch",
+        "expect": {
+          "outcome": "applied",
+          "pending": 1,
+          "questions": ["Get in Touch"],
+          "files": {
+            "src/components/Button1.tsx": {
+              "contains": ["disabled", "{\"Get in Touch\"}"],
+              "lacks": ["href"]
+            }
+          },
+          "absent": ["src/pages/GetInTouchPage.tsx"]
+        }
+      },
+      {
+        "say": "existing page or section",
+        "expect": { "outcome": "needs_clarification", "pending": 1 }
+      },
+      {
+        "say": "1",
+        "expect": {
+          "outcome": "applied",
+          "pending": 0,
+          "files": {
+            "src/components/Button1.tsx": {
+              "contains": ["href={\"/\"}"],
+              "lacks": ["disabled"]
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "footer then image above it, then move",
+    "turns": [
+      { "say": "Need a footer", "expect": { "outcome": "needs_clarification", "questions": ["footer show"], "pending": 1 } },
+      { "say": "Made with care", "expect": { "outcome": "applied", "pending": 0 } },
+      { "say": "Need a footer", "expect": { "outcome": "no_change", "pending": 0 } },
+      { "say": "add an image above the footer", "expect": { "outcome": "needs_clarification", "questions": ["address"] } },
+      { "say": "https://example.com/cat.png", "expect": { "outcome": "needs_clarification", "questions": ["alt text"] } },
+      {
+        "say": "A cat on a sofa",
+        "expect": {
+          "outcome": "applied",
+          "focus": "img_1",
+          "files": {
+            "src/components/Image1.tsx": {
+              "contains": ["src={\"https://example.com/cat.png\"}", "alt={\"A cat on a sofa\"}"]
+            }
+          }
+        }
+      },
+      {
+        "say": "Move the footer above the image",
+        "expect": {
+          "outcome": "applied",
+          "changed_files": ["src/pages/Home.tsx"],
+          "reply_contains": ["Moved footer_1 above img_1"]
+        }
+      },
+      { "say": "Move the footer above the image", "expect": { "outcome": "no_change" } }
+    ]
+  },
+  {
+    "name": "unsupported positioning writes nothing",
+    "turns": [
+      {
+        "say": "add a button called Go right of the hero",
+        "expect": { "outcome": "unsupported", "pending": 0, "absent": ["src/components/Button1.tsx"] }
+      },
+      {
+        "say": "Add a form below hero and delete the footer",
+        "expect": { "outcome": "unsupported", "pending": 0, "absent": ["src/components/Form1.tsx"] }
+      },
+      {
+        "say": "Move the form below hero",
+        "expect": { "outcome": "unsupported", "pending": 0 }
+      }
+    ]
+  }
+]

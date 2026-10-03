@@ -22,6 +22,52 @@ pub enum Request {
     AddLabelledItem(LabelledAddition),
     CreatePage(PageCreation),
     Style(StyleRequest),
+    /// `add a <role> [called <label>] [<relation> <anchor>]`.
+    AddElement(ElementAddition),
+    /// `move the <role> <relation> <anchor>`.
+    MoveElement(ElementMove),
+}
+
+/// Request to add one element, e.g. `Add a form below hero`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ElementAddition {
+    pub role: ElementRole,
+    /// The role phrase (`form`, `hero section`) in the original prompt.
+    pub role_span: Span,
+    /// Display label from `called` / `named` / a quoted label. Only a button
+    /// accepts one; for other roles the parser rejects it.
+    pub label: Option<Label>,
+    /// Where the element goes, relative to an anchor. A positioning request,
+    /// not a selector relation. `None` leaves the position to the planner.
+    pub position: Option<PositionClause>,
+    /// Complete meaningful command, excluding surrounding whitespace.
+    pub span: Span,
+}
+
+/// Request to move an existing element relative to an anchor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ElementMove {
+    pub selector: RoleSelector,
+    pub position: PositionClause,
+    /// Complete meaningful command, excluding surrounding whitespace.
+    pub span: Span,
+}
+
+/// A positioning request: a relation and the role it is relative to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PositionClause {
+    pub relation: PositionRelation,
+    pub anchor: RoleSelector,
+    /// Relation phrase through the anchor, in the original prompt.
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PositionRelation {
+    Above,
+    Below,
+    LeftOf,
+    RightOf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +100,8 @@ pub enum ElementRole {
     Image,
     Form,
     Hero,
+    Footer,
+    Button,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -541,6 +589,305 @@ fn parse_labelled_addition(input: &str, tokens: &[Token<'_>], span: Span) -> Opt
     )))
 }
 
+/// Role named by a single word (style grammar and anchors).
+fn role_word(text: &str) -> Option<ElementRole> {
+    Some(match text.to_ascii_lowercase().as_str() {
+        "image" => ElementRole::Image,
+        "form" => ElementRole::Form,
+        "hero" => ElementRole::Hero,
+        "footer" => ElementRole::Footer,
+        "button" => ElementRole::Button,
+        _ => return None,
+    })
+}
+
+/// Role phrase starting at `index` and its token count: a role word, or
+/// `hero section`. `terminal` allows a final period on the last token.
+fn role_at(tokens: &[Token<'_>], index: usize) -> Option<(ElementRole, usize)> {
+    let token = tokens.get(index)?;
+    let is_last = |count: usize| index + count == tokens.len();
+    if token_matches(token, "hero", false)
+        && tokens
+            .get(index + 1)
+            .is_some_and(|next| token_matches(next, "section", is_last(2)))
+    {
+        return Some((ElementRole::Hero, 2));
+    }
+    let stem = if is_last(1) {
+        token.text.strip_suffix('.').unwrap_or(token.text)
+    } else {
+        token.text
+    };
+    role_word(stem).map(|role| (role, 1))
+}
+
+/// Relation phrase starting at `index` and its token count. `to the left of`
+/// and `to the right of` are the long forms of `left of` and `right of`.
+fn relation_at(tokens: &[Token<'_>], index: usize) -> Option<(PositionRelation, usize)> {
+    let words = |expected: &[&str]| {
+        expected.iter().enumerate().all(|(offset, word)| {
+            tokens
+                .get(index + offset)
+                .is_some_and(|token| token_matches(token, word, false))
+        })
+    };
+    const PHRASES: &[(&[&str], PositionRelation)] = &[
+        (&["to", "the", "left", "of"], PositionRelation::LeftOf),
+        (&["to", "the", "right", "of"], PositionRelation::RightOf),
+        (&["left", "of"], PositionRelation::LeftOf),
+        (&["right", "of"], PositionRelation::RightOf),
+        (&["below"], PositionRelation::Below),
+        (&["above"], PositionRelation::Above),
+    ];
+    PHRASES
+        .iter()
+        .find(|(phrase, _)| words(phrase))
+        .map(|(phrase, relation)| (*relation, phrase.len()))
+}
+
+/// Span of `tokens[from..to]`; a final period of the whole command is
+/// sentence punctuation, not part of the phrase.
+fn phrase_span(tokens: &[Token<'_>], from: usize, to: usize) -> Span {
+    let last = &tokens[to - 1];
+    let trim = usize::from(to == tokens.len() && last.text.ends_with('.'));
+    Span {
+        start: tokens[from].span.start,
+        end: last.span.end - trim,
+    }
+}
+
+fn unsupported_outcome(reason: UnsupportedReason, span: Span) -> ParseOutcome {
+    ParseOutcome::Unsupported(Unsupported { reason, span })
+}
+
+fn tail_from(tokens: &[Token<'_>], index: usize, span: Span) -> ParseOutcome {
+    unsupported_outcome(
+        UnsupportedReason::UnsupportedTail,
+        Span {
+            start: tokens[index].span.start,
+            end: span.end,
+        },
+    )
+}
+
+/// `<relation> [the] <role>` at `index`, consuming the rest of the command.
+/// `Err` is the outcome to return (incomplete, unknown anchor, or tail).
+fn position_clause(
+    tokens: &[Token<'_>],
+    index: usize,
+    span: Span,
+) -> Result<PositionClause, ParseOutcome> {
+    let (relation, relation_len) =
+        relation_at(tokens, index).expect("caller checked for a relation phrase");
+    let mut at = index + relation_len;
+    if tokens
+        .get(at)
+        .is_some_and(|token| token_matches(token, "the", false))
+    {
+        at += 1;
+    }
+    if at >= tokens.len() {
+        return Err(unsupported_outcome(UnsupportedReason::IncompleteInput, span));
+    }
+    let Some((role, role_len)) = role_at(tokens, at) else {
+        return Err(unsupported_outcome(
+            UnsupportedReason::UnrecognizedInput,
+            span,
+        ));
+    };
+    let end = at + role_len;
+    if end < tokens.len() {
+        return Err(tail_from(tokens, end, span));
+    }
+    let anchor_span = phrase_span(tokens, at, end);
+    Ok(PositionClause {
+        relation,
+        anchor: RoleSelector {
+            role,
+            relation: None,
+            span: anchor_span,
+        },
+        span: Span {
+            start: tokens[index].span.start,
+            end: anchor_span.end,
+        },
+    })
+}
+
+/// `add|need a|an <role> [called|named <label> | "<label>"] [<relation> [the] <role>]`.
+///
+/// Returns `None` for anything that is not unmistakably this pattern (so
+/// `Add a Contact Us page` and `Add a form to top nav` keep their meaning).
+/// Only a button takes a label; elsewhere the clause is an unsupported tail.
+fn parse_element_add(input: &str, tokens: &[Token<'_>], span: Span) -> Option<ParseOutcome> {
+    if tokens.len() < 3
+        || !(token_matches(&tokens[0], "add", false) || token_matches(&tokens[0], "need", false))
+        || !(token_matches(&tokens[1], "a", false) || token_matches(&tokens[1], "an", false))
+    {
+        return None;
+    }
+    // A final `page` noun belongs to the page grammar (`add a form below hero page`).
+    if token_matches(tokens.last().expect("non-empty"), "page", true) {
+        return None;
+    }
+    let (role, role_len) = role_at(tokens, 2)?;
+    let role_span = phrase_span(tokens, 2, 2 + role_len);
+    let mut at = 2 + role_len;
+    let mut label = None;
+    let mut label_start = None;
+    if let Some(token) = tokens.get(at) {
+        let named = token_matches(token, "called", false) || token_matches(token, "named", false);
+        let quoted = input[token.span.start..].starts_with('"');
+        if named || quoted {
+            label_start = Some(token.span.start);
+            let first = if named { at + 1 } else { at };
+            if first >= tokens.len() {
+                return Some(unsupported_outcome(UnsupportedReason::IncompleteInput, span));
+            }
+            if input[tokens[first].span.start..].starts_with('"') {
+                let (parsed, close) = match quoted_label(input, tokens[first].span.start, span) {
+                    Ok(value) => value,
+                    Err(outcome) => return Some(outcome),
+                };
+                if close < span.end && !input[close..].starts_with(char::is_whitespace) {
+                    return Some(unsupported_outcome(
+                        UnsupportedReason::UnrecognizedInput,
+                        span,
+                    ));
+                }
+                at = tokens
+                    .iter()
+                    .position(|t| t.span.start >= close)
+                    .unwrap_or(tokens.len());
+                label = Some(parsed);
+            } else {
+                // Unquoted: words up to a relation phrase or the end. A
+                // relation word inside a label needs quotes.
+                let mut end = first + 1;
+                while end < tokens.len() && relation_at(tokens, end).is_none() {
+                    end += 1;
+                }
+                if tokens[first..end]
+                    .iter()
+                    .any(|t| t.text.contains(['"', '\\']))
+                {
+                    return Some(unsupported_outcome(UnsupportedReason::UnrecognizedInput, span));
+                }
+                if let Some(index) = tokens[first..end].iter().position(|t| {
+                    token_matches(t, "and", false) || token_matches(t, "then", false)
+                }) {
+                    return Some(tail_from(tokens, first + index, span));
+                }
+                let label_span = Span {
+                    start: tokens[first].span.start,
+                    end: tokens[end - 1].span.end,
+                };
+                let text = input[label_span.start..label_span.end].to_string();
+                // A final period belongs to the sentence, not the label.
+                let (text, label_span) = if end == tokens.len() && text.ends_with('.') {
+                    let trimmed = text[..text.len() - 1].to_string();
+                    let span = Span {
+                        start: label_span.start,
+                        end: label_span.end - 1,
+                    };
+                    (trimmed, span)
+                } else {
+                    (text, label_span)
+                };
+                if text.is_empty() {
+                    return Some(unsupported_outcome(UnsupportedReason::IncompleteInput, span));
+                }
+                label = Some(Label {
+                    text,
+                    span: label_span,
+                });
+                at = end;
+            }
+        }
+    }
+    if label.is_some() && role != ElementRole::Button {
+        return Some(tail_from(
+            tokens,
+            tokens
+                .iter()
+                .position(|t| Some(t.span.start) == label_start)
+                .unwrap_or(2 + role_len),
+            span,
+        ));
+    }
+    let mut position = None;
+    if at < tokens.len() {
+        if relation_at(tokens, at).is_some() {
+            match position_clause(tokens, at, span) {
+                Ok(clause) => position = Some(clause),
+                Err(outcome) => return Some(outcome),
+            }
+        } else if label.is_some() {
+            return Some(tail_from(tokens, at, span));
+        } else {
+            // Not this pattern (`to top nav`, `page`, ...): let the other
+            // grammars decide, so nothing is silently dropped here.
+            return None;
+        }
+    }
+    Some(ParseOutcome::Parsed(Request::AddElement(ElementAddition {
+        role,
+        role_span,
+        label,
+        position,
+        span,
+    })))
+}
+
+/// `move [the] <role> <relation> [the] <role>`.
+fn parse_element_move(tokens: &[Token<'_>], span: Span) -> Option<ParseOutcome> {
+    if !token_matches(&tokens[0], "move", false) {
+        return None;
+    }
+    let mut at = 1;
+    if tokens
+        .get(at)
+        .is_some_and(|token| token_matches(token, "the", false))
+    {
+        at += 1;
+    }
+    if at >= tokens.len() {
+        return Some(unsupported_outcome(UnsupportedReason::IncompleteInput, span));
+    }
+    let Some((role, role_len)) = role_at(tokens, at) else {
+        return Some(unsupported_outcome(
+            UnsupportedReason::UnrecognizedInput,
+            span,
+        ));
+    };
+    let selector = RoleSelector {
+        role,
+        relation: None,
+        span: phrase_span(tokens, at, at + role_len),
+    };
+    at += role_len;
+    if at >= tokens.len() {
+        return Some(unsupported_outcome(UnsupportedReason::IncompleteInput, span));
+    }
+    if relation_at(tokens, at).is_none() {
+        return Some(unsupported_outcome(
+            UnsupportedReason::UnrecognizedInput,
+            span,
+        ));
+    }
+    Some(match position_clause(tokens, at, span) {
+        Ok(position) => ParseOutcome::Parsed(Request::MoveElement(ElementMove {
+            selector,
+            position,
+            span,
+        })),
+        Err(outcome) => outcome,
+    })
+}
+
+const ROLE_SLOT: &str = "{role}";
+const ANCHOR_SLOT: &str = "{anchor}";
+
 fn parse_style(tokens: &[Token<'_>], span: Span) -> Option<ParseOutcome> {
     #[derive(Clone, Copy)]
     struct Pattern {
@@ -549,57 +896,74 @@ fn parse_style(tokens: &[Token<'_>], span: Span) -> Option<ParseOutcome> {
         related: bool,
         change: StyleChange,
     }
+    // `{role}` matches any element role word; `{anchor}` the role after `below`.
     const PATTERNS: &[Pattern] = &[
         Pattern {
-            words: &["give", "the", "form", "below", "hero", "more", "padding"],
+            words: &[
+                "give", "the", ROLE_SLOT, "below", ANCHOR_SLOT, "more", "padding",
+            ],
             role_index: 2,
             related: true,
             change: StyleChange::Padding(PaddingChange::Increase),
         },
         Pattern {
-            words: &["image", "needs", "rounded", "corners"],
+            words: &[ROLE_SLOT, "needs", "rounded", "corners"],
             role_index: 0,
             related: false,
             change: StyleChange::RoundedCorners,
         },
         Pattern {
-            words: &["image", "needs", "full", "width"],
+            words: &[ROLE_SLOT, "needs", "full", "width"],
             role_index: 0,
             related: false,
             change: StyleChange::FullWidth,
         },
         Pattern {
-            words: &["give", "the", "form", "less", "padding"],
+            words: &["give", "the", ROLE_SLOT, "more", "padding"],
+            role_index: 2,
+            related: false,
+            change: StyleChange::Padding(PaddingChange::Increase),
+        },
+        Pattern {
+            words: &["give", "the", ROLE_SLOT, "less", "padding"],
             role_index: 2,
             related: false,
             change: StyleChange::Padding(PaddingChange::Decrease),
         },
         Pattern {
-            words: &["increase", "form", "padding"],
+            words: &["increase", ROLE_SLOT, "padding"],
             role_index: 1,
             related: false,
             change: StyleChange::Padding(PaddingChange::Increase),
         },
         Pattern {
-            words: &["decrease", "form", "padding"],
+            words: &["decrease", ROLE_SLOT, "padding"],
             role_index: 1,
             related: false,
             change: StyleChange::Padding(PaddingChange::Decrease),
         },
     ];
 
-    let style_start = ["image", "give", "increase", "decrease"]
+    let style_start = ["give", "increase", "decrease"]
         .iter()
-        .any(|word| token_matches(&tokens[0], word, false));
+        .any(|word| token_matches(&tokens[0], word, false))
+        || role_word(tokens[0].text).is_some();
     if !style_start {
         return None;
     }
+    let slot_matches = |token: &Token<'_>, expected: &str| {
+        if expected == ROLE_SLOT || expected == ANCHOR_SLOT {
+            role_word(token.text).is_some()
+        } else {
+            token_matches(token, expected, false)
+        }
+    };
     for pattern in PATTERNS {
         let compared = tokens.len().min(pattern.words.len());
         if !tokens[..compared]
             .iter()
             .zip(pattern.words.iter())
-            .all(|(token, expected)| token_matches(token, expected, false))
+            .all(|(token, expected)| slot_matches(token, expected))
         {
             continue;
         }
@@ -619,11 +983,12 @@ fn parse_style(tokens: &[Token<'_>], span: Span) -> Option<ParseOutcome> {
             }));
         }
         let role_token = &tokens[pattern.role_index];
+        let role = role_word(role_token.text).expect("slot matched a role word");
         let relation = pattern.related.then(|| {
             let anchor_token = &tokens[pattern.role_index + 2];
             SelectorRelation::Below {
                 anchor: Box::new(RoleSelector {
-                    role: ElementRole::Hero,
+                    role: role_word(anchor_token.text).expect("slot matched a role word"),
                     relation: None,
                     span: anchor_token.span,
                 }),
@@ -640,11 +1005,7 @@ fn parse_style(tokens: &[Token<'_>], span: Span) -> Option<ParseOutcome> {
         };
         return Some(ParseOutcome::Parsed(Request::Style(StyleRequest {
             selector: RoleSelector {
-                role: if pattern.role_index == 0 {
-                    ElementRole::Image
-                } else {
-                    ElementRole::Form
-                },
+                role,
                 relation,
                 span: Span {
                     start: role_token.span.start,
@@ -746,6 +1107,12 @@ pub fn parse(input: &str) -> ParseOutcome {
     if let Some(outcome) = parse_style(&tokens, span) {
         return outcome;
     }
+    if let Some(outcome) = parse_element_add(input, &tokens, span) {
+        return outcome;
+    }
+    if let Some(outcome) = parse_element_move(&tokens, span) {
+        return outcome;
+    }
     if let Some(outcome) = parse_page_creation(input, &tokens, span) {
         return outcome;
     }
@@ -795,6 +1162,23 @@ mod tests {
                 Request::CreatePage(page) => {
                     assert_valid_span(input, page.span);
                     assert_valid_span(input, page.label.span);
+                }
+                Request::AddElement(add) => {
+                    assert_valid_span(input, add.span);
+                    assert_valid_span(input, add.role_span);
+                    if let Some(label) = &add.label {
+                        assert_valid_span(input, label.span);
+                    }
+                    if let Some(position) = &add.position {
+                        assert_valid_span(input, position.span);
+                        assert_valid_span(input, position.anchor.span);
+                    }
+                }
+                Request::MoveElement(mv) => {
+                    assert_valid_span(input, mv.span);
+                    assert_valid_span(input, mv.selector.span);
+                    assert_valid_span(input, mv.position.span);
+                    assert_valid_span(input, mv.position.anchor.span);
                 }
                 Request::Style(style) => {
                     assert_valid_span(input, style.span);
@@ -1878,5 +2262,344 @@ mod tests {
                 span: Span { start: 17, end: 33 },
             })
         );
+    }
+
+    // ---------------------------------------------------------------- T8
+
+    fn whole(input: &str) -> Span {
+        Span {
+            start: 0,
+            end: input.len(),
+        }
+    }
+
+    fn rejected(input: &str, reason: UnsupportedReason, span: Span) {
+        let outcome = parse(input);
+        assert_eq!(
+            outcome,
+            ParseOutcome::Unsupported(Unsupported { reason, span }),
+            "{input:?}"
+        );
+        assert_all_spans_valid(input, &outcome);
+    }
+
+    fn anchor(role: ElementRole, start: usize, end: usize) -> RoleSelector {
+        RoleSelector {
+            role,
+            relation: None,
+            span: Span { start, end },
+        }
+    }
+
+    #[test]
+    fn add_a_role_parses_every_element_with_the_role_span() {
+        for (input, role, start, end) in [
+            ("Add a form", ElementRole::Form, 6, 10),
+            ("add an image", ElementRole::Image, 7, 12),
+            ("Need a footer", ElementRole::Footer, 7, 13),
+            ("Need a hero section", ElementRole::Hero, 7, 19),
+            ("add a hero", ElementRole::Hero, 6, 10),
+            ("Add a button", ElementRole::Button, 6, 12),
+            ("add a form.", ElementRole::Form, 6, 10),
+        ] {
+            let outcome = parse(input);
+            assert_eq!(
+                outcome,
+                ParseOutcome::Parsed(Request::AddElement(ElementAddition {
+                    role,
+                    role_span: Span { start, end },
+                    label: None,
+                    position: None,
+                    span: Span {
+                        start: 0,
+                        end: input.trim_end().len()
+                    },
+                })),
+                "{input:?}"
+            );
+            assert_all_spans_valid(input, &outcome);
+        }
+    }
+
+    #[test]
+    fn position_clauses_are_positioning_not_selector_relations() {
+        let input = "Add a form below hero";
+        assert_eq!(
+            parse(input),
+            ParseOutcome::Parsed(Request::AddElement(ElementAddition {
+                role: ElementRole::Form,
+                role_span: Span { start: 6, end: 10 },
+                label: None,
+                position: Some(PositionClause {
+                    relation: PositionRelation::Below,
+                    anchor: anchor(ElementRole::Hero, 17, 21),
+                    span: Span { start: 11, end: 21 },
+                }),
+                span: whole(input),
+            }))
+        );
+        for (input, relation) in [
+            ("add an image above the footer", PositionRelation::Above),
+            ("add a button left of the image", PositionRelation::LeftOf),
+            ("add a button right of the image", PositionRelation::RightOf),
+            ("add a button to the left of the image", PositionRelation::LeftOf),
+            ("add a button to the right of image", PositionRelation::RightOf),
+        ] {
+            let ParseOutcome::Parsed(Request::AddElement(add)) = parse(input) else {
+                panic!("{input:?}")
+            };
+            assert_eq!(add.position.unwrap().relation, relation, "{input:?}");
+            assert_all_spans_valid(input, &parse(input));
+        }
+        // Anything unknown after `below` is rejected, never guessed.
+        let input = "Add a form below the page footer";
+        rejected(
+            input,
+            UnsupportedReason::UnrecognizedInput,
+            whole(input),
+        );
+        let input = "Add a form below the hero section.";
+        let ParseOutcome::Parsed(Request::AddElement(add)) = parse(input) else {
+            panic!()
+        };
+        let position = add.position.unwrap();
+        assert_eq!(position.anchor.role, ElementRole::Hero);
+        assert_eq!(&input[position.anchor.span.start..position.anchor.span.end], "hero section");
+        assert_eq!(&input[position.span.start..position.span.end], "below the hero section");
+    }
+
+    #[test]
+    fn a_button_takes_a_label_in_called_named_and_quoted_forms() {
+        for (input, text, start) in [
+            ("Add a button called Get a callback", "Get a callback", 20),
+            ("add a button named contact us", "contact us", 19),
+            ("Add a button called \"Back below\"", "Back below", 21),
+            ("Add a button \"Terms of Use\"", "Terms of Use", 14),
+        ] {
+            let outcome = parse(input);
+            let ParseOutcome::Parsed(Request::AddElement(add)) = &outcome else {
+                panic!("{input:?}: {outcome:?}")
+            };
+            let label = add.label.as_ref().unwrap();
+            assert_eq!(label.text, text, "{input:?}");
+            assert_eq!(label.span.start, start, "{input:?}");
+            assert_eq!(&input[label.span.start..label.span.end], text);
+            assert!(add.position.is_none());
+            assert_all_spans_valid(input, &outcome);
+        }
+        // Label and position together; a relation word ends an unquoted label.
+        let input = "Add a button called Get a callback below the form";
+        let ParseOutcome::Parsed(Request::AddElement(add)) = parse(input) else {
+            panic!()
+        };
+        assert_eq!(add.label.unwrap().text, "Get a callback");
+        assert_eq!(add.position.unwrap().anchor.role, ElementRole::Form);
+        // A quoted label may contain relation words and an escaped quote.
+        let input = "Add a button \"Above \\\"all\\\"\" above the form";
+        let ParseOutcome::Parsed(Request::AddElement(add)) = parse(input) else {
+            panic!("{:?}", parse(input))
+        };
+        assert_eq!(add.label.unwrap().text, "Above \"all\"");
+        assert_eq!(add.position.unwrap().relation, PositionRelation::Above);
+    }
+
+    #[test]
+    fn only_buttons_take_labels_and_nothing_is_dropped() {
+        let input = "Add a form called Contact";
+        rejected(
+            input,
+            UnsupportedReason::UnsupportedTail,
+            Span { start: 11, end: input.len() },
+        );
+        let input = "Add an image \"Cat\"";
+        rejected(
+            input,
+            UnsupportedReason::UnsupportedTail,
+            Span { start: 13, end: input.len() },
+        );
+        let input = "Add a form below hero and delete the footer";
+        rejected(
+            input,
+            UnsupportedReason::UnsupportedTail,
+            Span { start: 22, end: input.len() },
+        );
+        let input = "Add a button called Go and stop";
+        rejected(
+            input,
+            UnsupportedReason::UnsupportedTail,
+            Span { start: 23, end: input.len() },
+        );
+        let input = "Add a form below hero footer";
+        rejected(
+            input,
+            UnsupportedReason::UnsupportedTail,
+            Span { start: 22, end: input.len() },
+        );
+    }
+
+    #[test]
+    fn incomplete_and_unknown_positions_are_rejected_not_guessed() {
+        for input in ["Add a form below", "Add a form below the", "Add a button called", "Add a button left of"] {
+            rejected(input, UnsupportedReason::IncompleteInput, whole(input));
+        }
+        for input in [
+            "Add a form below header",
+            "Add a button called \"Go\"x",
+        ] {
+            let outcome = parse(input);
+            assert!(
+                matches!(&outcome, ParseOutcome::Unsupported(u) if u.reason == UnsupportedReason::UnrecognizedInput),
+                "{input:?}: {outcome:?}"
+            );
+            assert!(!matches!(outcome, ParseOutcome::Parsed(_)), "{input:?}: {outcome:?}");
+            assert_all_spans_valid(input, &outcome);
+        }
+        rejected("do not add a form", UnsupportedReason::NegatedRequest, whole("do not add a form"));
+        // Unquoted unmatched quote inside a label.
+        rejected(
+            "Add a button called \"Go",
+            UnsupportedReason::IncompleteInput,
+            whole("Add a button called \"Go"),
+        );
+    }
+
+    #[test]
+    fn other_add_grammars_keep_their_meaning() {
+        // Labelled additions: the element words are only labels here.
+        for (input, label) in [
+            ("Add a form to top nav", "a form"),
+            ("Add form to top nav", "form"),
+            ("Add Image", "Image"),
+            ("add a button to top nav", "a button"),
+        ] {
+            let ParseOutcome::Parsed(Request::AddLabelledItem(item)) = parse(input) else {
+                panic!("{input:?}: {:?}", parse(input))
+            };
+            assert_eq!(item.label.text, label, "{input:?}");
+        }
+        // A page named like a role.
+        let ParseOutcome::Parsed(Request::CreatePage(page)) = parse("Add a form page") else {
+            panic!()
+        };
+        assert_eq!(page.label.text, "form");
+        // An unquoted label that is not a role stays a label.
+        assert!(matches!(
+            parse("Add a Contact Us page"),
+            ParseOutcome::Parsed(Request::CreatePage(_))
+        ));
+    }
+
+    #[test]
+    fn move_requests_parse_target_relation_and_anchor() {
+        let input = "Move the form below hero";
+        assert_eq!(
+            parse(input),
+            ParseOutcome::Parsed(Request::MoveElement(ElementMove {
+                selector: anchor(ElementRole::Form, 9, 13),
+                position: PositionClause {
+                    relation: PositionRelation::Below,
+                    anchor: anchor(ElementRole::Hero, 20, 24),
+                    span: Span { start: 14, end: 24 },
+                },
+                span: whole(input),
+            }))
+        );
+        for (input, role, relation, anchor_role) in [
+            ("move image above the footer", ElementRole::Image, PositionRelation::Above, ElementRole::Footer),
+            ("Move the button right of the image", ElementRole::Button, PositionRelation::RightOf, ElementRole::Image),
+            ("move the footer to the left of the form.", ElementRole::Footer, PositionRelation::LeftOf, ElementRole::Form),
+        ] {
+            let outcome = parse(input);
+            let ParseOutcome::Parsed(Request::MoveElement(mv)) = &outcome else {
+                panic!("{input:?}: {outcome:?}")
+            };
+            assert_eq!(
+                (mv.selector.role, mv.position.relation, mv.position.anchor.role),
+                (role, relation, anchor_role),
+                "{input:?}"
+            );
+            assert_all_spans_valid(input, &outcome);
+        }
+        for input in ["Move", "Move the", "Move the form", "Move the form below", "Move the form below the"] {
+            rejected(input, UnsupportedReason::IncompleteInput, whole(input));
+        }
+        for input in ["Move the header below hero", "Move the form beside hero", "Move the form below header", "Move it below hero"] {
+            rejected(input, UnsupportedReason::UnrecognizedInput, whole(input));
+        }
+        let input = "Move the form below hero then add a footer";
+        rejected(input, UnsupportedReason::UnsupportedTail, Span { start: 25, end: input.len() });
+    }
+
+    #[test]
+    fn style_patterns_cover_every_role_and_keep_rejections() {
+        for (input, role) in [
+            ("Hero needs rounded corners", ElementRole::Hero),
+            ("Footer needs full width", ElementRole::Footer),
+            ("Button needs rounded corners", ElementRole::Button),
+            ("Give the hero less padding", ElementRole::Hero),
+            ("Increase footer padding", ElementRole::Footer),
+            ("Decrease button padding", ElementRole::Button),
+        ] {
+            let outcome = parse(input);
+            let ParseOutcome::Parsed(Request::Style(style)) = &outcome else {
+                panic!("{input:?}: {outcome:?}")
+            };
+            assert_eq!(style.selector.role, role, "{input:?}");
+            assert_all_spans_valid(input, &outcome);
+        }
+        let input = "Give the form below image more padding";
+        let ParseOutcome::Parsed(Request::Style(style)) = parse(input) else {
+            panic!()
+        };
+        let Some(SelectorRelation::Below { anchor, .. }) = style.selector.relation else {
+            panic!()
+        };
+        assert_eq!(anchor.role, ElementRole::Image);
+        rejected("Hero needs square corners", UnsupportedReason::UnrecognizedInput, whole("Hero needs square corners"));
+        rejected("Footer needs", UnsupportedReason::IncompleteInput, whole("Footer needs"));
+        rejected("Hero banner", UnsupportedReason::UnrecognizedInput, whole("Hero banner"));
+    }
+
+    #[test]
+    fn element_grammar_adversarial_inputs_never_panic_and_keep_valid_spans() {
+        for input in [
+            "Add a",
+            "Add a form below",
+            "add a form below the the hero",
+            "Add an",
+            "Add a button called",
+            "Add a button called \"",
+            "Add a button \"\"",
+            "Add a button called ☕ below the form",
+            "Add a button called \"☕\" below the form",
+            "move move move",
+            "Move the hero section below the hero section",
+            "Add a hero section.",
+            "Add a hero section called x",
+            "Add a button called below the form",
+            "add a button to the left of",
+            "add a button to the left of the",
+            "Add a form to the left of hero and below the footer",
+            "Add a form below hero. ",
+            "ADD A FORM BELOW HERO",
+            "add\ta\nform\u{a0}below hero",
+        ] {
+            let first = parse(input);
+            assert_eq!(first, parse(input), "{input:?}");
+            assert_all_spans_valid(input, &first);
+        }
+        // Case and whitespace do not change the request.
+        let canonical = parse("add a form below hero");
+        for variant in ["ADD A FORM BELOW HERO", "  Add   a  Form below   Hero  "] {
+            let (ParseOutcome::Parsed(Request::AddElement(a)), ParseOutcome::Parsed(Request::AddElement(b))) =
+                (&parse(variant), &canonical)
+            else {
+                panic!("{variant:?}")
+            };
+            assert_eq!(
+                (a.role, a.position.as_ref().map(|p| (p.relation, p.anchor.role))),
+                (b.role, b.position.as_ref().map(|p| (p.relation, p.anchor.role)))
+            );
+        }
     }
 }

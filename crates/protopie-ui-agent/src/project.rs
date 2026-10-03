@@ -4,7 +4,8 @@
 //!
 //! * Files the agent generates *wholly* are recorded as an [`OwnedSource`] with
 //!   `region: None` and a fingerprint of the entire file.
-//! * Shared files (the reference `App.tsx`, `Home.tsx`, `Home.module.css`) are
+//! * Shared files (the reference `App.tsx`, `router.ts`, `Home.tsx`,
+//!   `Home.module.css`, `index.css`) are
 //!   owned only inside *regions* delimited by marker lines containing
 //!   `protopie:begin <id>` and `protopie:end <id>` (in any comment syntax).
 //!   Everything outside the markers is never touched. A region's fingerprint
@@ -39,8 +40,11 @@ pub const SESSIONS_DIR: &str = "sessions";
 /// Shared files of the reference template and the regions it exposes.
 const TEMPLATE_REGIONS: &[(&str, &str)] = &[
     ("src/pages/Home.tsx", "hero_1"),
+    ("src/pages/Home.tsx", "home-flow"),
     ("src/pages/Home.module.css", "hero_1"),
     ("src/App.tsx", "layout-top"),
+    ("src/router.ts", "routes"),
+    ("src/index.css", "tokens"),
 ];
 
 /// Result of loading a project's model.
@@ -177,16 +181,28 @@ pub fn seed_snapshot(dir: &Path) -> Result<ProjectSnapshot> {
         file: "src/pages/Home.tsx".into(),
         region: Some("hero_1".into()),
     });
+    // The planner's view of the hero's cascade is what its stylesheet declares.
+    let hero_css = read_text(dir, "src/pages/Home.module.css")?
+        .and_then(|text| extract_region(&text, "hero_1"))
+        .unwrap_or_default();
     hero.style = Some(StyleBinding {
         file: "src/pages/Home.module.css".into(),
         class: "hero".into(),
         region: Some("hero_1".into()),
         scope: StyleScope::Instance,
+        values: crate::emit::css_declared_values(&hero_css, ".hero"),
+        instance_override: false,
     });
+    // `.hero` is a centered flex column.
+    hero.layout = Some(ContainerLayout::Vertical);
     let mut snapshot = ProjectSnapshot::empty();
     snapshot.elements.push(hero);
     snapshot.owned = owned;
     snapshot.id_counters.insert("hero".into(), 1);
+    // Home renders its elements one after another in normal block flow.
+    snapshot
+        .page_layouts
+        .insert(DEFAULT_PAGE.into(), ContainerLayout::Vertical);
     Ok(snapshot)
 }
 
@@ -382,7 +398,9 @@ mod tests {
             (style.class.as_str(), style.scope),
             ("hero", StyleScope::Instance)
         );
-        assert_eq!(snapshot.owned.len(), 3);
+        assert_eq!(snapshot.owned.len(), 6);
+        assert_eq!(style.values.get("padding").map(String::as_str), Some("2rem 1rem"));
+        assert_eq!(hero.layout, Some(ContainerLayout::Vertical));
         assert_eq!(snapshot.next_id("hero"), ElementId::new("hero_2"));
         // Round trip: save + load yields the same value, and a fresh seed agrees.
         save_project(&dir, &snapshot).unwrap();
