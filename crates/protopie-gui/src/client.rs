@@ -4,11 +4,12 @@
 use std::sync::mpsc::{channel, Receiver, Sender};
 
 use protopie_api::{
-    AbortProjectRequest, AbortProjectResponse, ChatRequest, ChatResponse, CreateProjectRequest,
+    AbortProjectRequest, AbortProjectResponse, AnswerProjectRequest, ChatRequest, ChatResponse, CreateProjectRequest,
     CreateProjectResponse, ErrorResponse, ListProjectsResponse, ModifyProjectRequest,
-    ModifyProjectResponse, ProjectInfo, CHAT_PATH, PROJECTS_ABORT_PATH, PROJECTS_MODIFY_PATH,
-    PROJECTS_PATH,
+    ModifyProjectResponse, ProjectInfo, CHAT_PATH, PROJECTS_ABORT_PATH, PROJECTS_ANSWER_PATH,
+    PROJECTS_MODIFY_PATH, PROJECTS_PATH,
 };
+use crate::review::{Expected, Sent};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -16,6 +17,11 @@ use serde::Serialize;
 pub enum Event {
     /// Reply to a prompt, from either `/chat` or the modify endpoint.
     Reply(Result<String, String>),
+    /// Reply to a project command or answer. `applied` is false for a preview.
+    Modified {
+        applied: bool,
+        result: Result<ModifyProjectResponse, String>,
+    },
     Projects(Result<Vec<ProjectInfo>, String>),
     ProjectCreated(Result<CreateProjectResponse, String>),
 }
@@ -77,23 +83,51 @@ impl ApiClient {
         });
     }
 
-    /// Prompt for a selected project. Every send is a deliberate new request
-    /// (fresh ID) in the GUI's conversation, whose focus and pending questions
-    /// the project keeps across restarts.
-    pub fn modify(&self, project_path: String, command: String) {
+    /// Request for a selected project in the GUI's conversation, whose focus
+    /// and pending questions the project keeps across restarts. Without
+    /// `expected` it is a dry run (a preview, nothing written); with it, the
+    /// change is applied only against the previewed plan and revision. Every
+    /// apply is a deliberate new request (fresh ID).
+    pub fn send(&self, project_path: String, sent: Sent, expected: Option<Expected>) {
         let request_id = new_request_id();
+        let applied = expected.is_some();
         self.spawn(move |base| {
-            let r = post_json::<_, ModifyProjectResponse>(
-                &format!("{base}{PROJECTS_MODIFY_PATH}"),
-                ModifyProjectRequest {
-                    project_path,
-                    command,
-                    conversation_id: Some(CONVERSATION_ID.into()),
-                    request_id: Some(request_id),
-                    dry_run: false,
-                },
-            );
-            Event::Reply(r.map(|r| r.display_text()))
+            let (expected_revision, expected_plan_id) = match expected {
+                Some(e) => (Some(e.revision), Some(e.plan_id)),
+                None => (None, None),
+            };
+            let result = match sent {
+                Sent::Command(command) => post_json(
+                    &format!("{base}{PROJECTS_MODIFY_PATH}"),
+                    ModifyProjectRequest {
+                        project_path,
+                        command,
+                        conversation_id: Some(CONVERSATION_ID.into()),
+                        request_id: applied.then_some(request_id),
+                        dry_run: !applied,
+                        expected_revision,
+                        expected_plan_id,
+                    },
+                ),
+                Sent::Answer {
+                    question_id,
+                    option_key,
+                } => post_json(
+                    &format!("{base}{PROJECTS_ANSWER_PATH}"),
+                    AnswerProjectRequest {
+                        project_path,
+                        question_id,
+                        option_key: Some(option_key),
+                        text: None,
+                        conversation_id: Some(CONVERSATION_ID.into()),
+                        request_id: applied.then_some(request_id),
+                        dry_run: !applied,
+                        expected_revision,
+                        expected_plan_id,
+                    },
+                ),
+            };
+            Event::Modified { applied, result }
         });
     }
 

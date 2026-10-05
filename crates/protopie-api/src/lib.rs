@@ -100,6 +100,12 @@ pub struct ModifyProjectRequest {
     /// Prepare only: report what would change and write nothing.
     #[serde(default)]
     pub dry_run: bool,
+    /// Apply only against this project revision (a preview's `base_revision`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<u64>,
+    /// Apply only the plan a preview showed (its `plan_id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_plan_id: Option<String>,
 }
 
 /// Body of `POST /projects/answer`: a structured answer to a pending question
@@ -120,6 +126,12 @@ pub struct AnswerProjectRequest {
     pub request_id: Option<String>,
     #[serde(default)]
     pub dry_run: bool,
+    /// Apply only against this project revision (a preview's `base_revision`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<u64>,
+    /// Apply only the plan a preview showed (its `plan_id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_plan_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,6 +142,16 @@ pub struct ModifyProjectResponse {
     #[serde(default)]
     pub outcome: Option<ModifyOutcome>,
 }
+
+/// A proposed change to one file as a line diff (`-` removed, `+` added).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileDiff {
+    pub path: String,
+    pub diff: String,
+}
+
+/// Longest diff shown per file in chat text.
+const DIFF_PREVIEW_LINES: usize = 40;
 
 /// Question summary shown to the user.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,7 +177,14 @@ pub enum ModifyOutcome {
     /// Dry run result; nothing was written.
     Preview {
         plan_id: String,
+        /// Project revision the preview was prepared against; send it back as
+        /// `expected_revision` together with `plan_id` to apply this preview.
+        #[serde(default)]
+        base_revision: u64,
         changed_files: Vec<String>,
+        /// Proposed code changes per file; absent from older servers.
+        #[serde(default)]
+        diffs: Vec<FileDiff>,
         questions: Vec<QuestionSummary>,
     },
     Applied {
@@ -182,6 +211,21 @@ impl ModifyProjectResponse {
     /// Text for the chat view: the summary plus the outcome's details.
     pub fn display_text(&self) -> String {
         let mut text = self.reply.clone();
+        if let Some(ModifyOutcome::Preview { diffs, .. }) = &self.outcome {
+            for d in diffs {
+                text.push_str(&format!("\n\n{}", d.path));
+                let lines: Vec<&str> = d.diff.lines().skip(2).collect();
+                for l in lines.iter().take(DIFF_PREVIEW_LINES) {
+                    text.push_str(&format!("\n{l}"));
+                }
+                if lines.len() > DIFF_PREVIEW_LINES {
+                    text.push_str(&format!(
+                        "\n... {} more lines",
+                        lines.len() - DIFF_PREVIEW_LINES
+                    ));
+                }
+            }
+        }
         let questions: &[QuestionSummary] = match &self.outcome {
             Some(ModifyOutcome::Unsupported { explanation }) => {
                 text.push_str(&format!("\nUnsupported: {explanation}"));
@@ -236,10 +280,14 @@ mod tests {
             conversation_id: Some("gui".into()),
             request_id: Some("r1".into()),
             dry_run: false,
+            expected_revision: Some(3),
+            expected_plan_id: None,
         })
         .unwrap();
         assert_eq!(json["conversation_id"], "gui");
         assert_eq!(json["request_id"], "r1");
+        assert_eq!(json["expected_revision"], 3);
+        assert!(json.get("expected_plan_id").is_none());
     }
 
     #[test]
@@ -274,6 +322,32 @@ mod tests {
             }),
         };
         assert_eq!(applied.display_text(), "Added it.\n? Where?\n  1. A");
+    }
+
+    #[test]
+    fn preview_text_shows_diffs_and_old_previews_still_parse() {
+        let old: ModifyOutcome =
+            serde_json::from_str(r#"{"kind":"preview","plan_id":"p","changed_files":[],"questions":[]}"#)
+                .unwrap();
+        assert!(matches!(old, ModifyOutcome::Preview { base_revision: 0, .. }));
+        let long: String = (0..50).map(|i| format!("+line {i}\n")).collect();
+        let preview = ModifyProjectResponse {
+            reply: "Preview: x".into(),
+            outcome: Some(ModifyOutcome::Preview {
+                plan_id: "p".into(),
+                base_revision: 2,
+                changed_files: vec!["a.tsx".into()],
+                diffs: vec![FileDiff {
+                    path: "a.tsx".into(),
+                    diff: format!("--- /dev/null\n+++ a.tsx\n{long}"),
+                }],
+                questions: vec![],
+            }),
+        };
+        let text = preview.display_text();
+        assert!(text.starts_with("Preview: x\n\na.tsx\n+line 0\n"));
+        assert!(!text.contains("--- /dev/null"));
+        assert!(text.ends_with("... 10 more lines"));
     }
 
     #[test]

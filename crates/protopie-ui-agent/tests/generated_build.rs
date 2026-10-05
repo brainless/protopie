@@ -281,3 +281,49 @@ fn generated_page_elements_type_check_and_build() {
         },
     );
 }
+
+#[test]
+#[ignore = "needs Node: run `npm ci` in reference/, then pass --ignored"]
+fn generated_contexts_type_check_and_build() {
+    generate_build_check(
+        "contexts",
+        |_| {},
+        &[
+            "Add a Doctors page",
+            "Add a Visits page",
+            // Text state read by one page; scope is in the prompt.
+            "Share the selected doctor across pages",
+            "text",
+            "Dr. \"Rao\" <b>{x}</b>",
+            "doctors",
+            "done",
+            // Number state read by both pages; the scope is asked.
+            "Share the visit count",
+            "across all pages",
+            "number",
+            "007",
+            "visits",
+            "doctors",
+            // Yes/no state and an optional text that starts unset.
+            "Share the \"Is Open\" across pages",
+            "yes or no",
+            "yes",
+            "doctors",
+            "done",
+            "Share the last note across pages",
+            "optional text",
+            "visits",
+            "done",
+        ],
+        |project| {
+            let app = std::fs::read_to_string(project.join("src/App.tsx")).unwrap();
+            assert!(app.contains("<SelectedDoctorProvider>"), "{app}");
+            assert!(app.contains("<LastNoteProvider>"), "{app}");
+            let doctors =
+                std::fs::read_to_string(project.join("src/pages/DoctorsPage.tsx")).unwrap();
+            assert!(doctors.contains("useContext(VisitCountContext)"), "{doctors}");
+            let note = std::fs::read_to_string(project.join("src/context/LastNote.tsx")).unwrap();
+            assert!(note.contains("createSignal<string | undefined>()"), "{note}");
+        },
+    );
+}

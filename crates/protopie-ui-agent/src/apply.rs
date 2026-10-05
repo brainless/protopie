@@ -68,6 +68,7 @@ const LEDGER_FILE: &str = ".protopie/applied.json";
 
 const LAYOUT_FILE: &str = "src/App.tsx";
 const LAYOUT_REGION: &str = "layout-top";
+const PROVIDERS_REGION: &str = "providers";
 const HOME_FILE: &str = "src/pages/Home.tsx";
 const HOME_FLOW_REGION: &str = "home-flow";
 const ROUTER_FILE: &str = "src/router.ts";
@@ -881,6 +882,59 @@ fn refresh_home_flow(ws: &mut Workspace, snapshot: &ProjectSnapshot) -> Result<O
     Ok(None)
 }
 
+/// Rewrites the `providers` region of `App.tsx` from the model: one import
+/// and one nested provider per context, in creation order. Returns the reason
+/// when the region cannot be written.
+fn refresh_providers(ws: &mut Workspace, snapshot: &ProjectSnapshot) -> Result<Option<String>> {
+    let Some(text) = ws.current(LAYOUT_FILE)? else {
+        return Ok(Some(format!("{LAYOUT_FILE} is missing")));
+    };
+    if extract_region(&text, PROVIDERS_REGION).is_none() {
+        return Ok(Some(format!(
+            "{LAYOUT_FILE} has no protopie:begin/end {PROVIDERS_REGION} region (the project \
+             predates context support); add the region, the `Providers` component and its \
+             use around the layout as in the reference template"
+        )));
+    }
+    let contexts: Vec<&ContextRecord> = snapshot.contexts.iter().collect();
+    let body = emit::providers_region(&contexts);
+    let new_text = replace_region(&text, PROVIDERS_REGION, &body).expect("region was just found");
+    ws.set(LAYOUT_FILE, Some(PROVIDERS_REGION), new_text)?;
+    Ok(None)
+}
+
+/// Re-renders a created page from the model, including the contexts it reads.
+/// Returns the reason when the page cannot be written.
+fn refresh_page(
+    ws: &mut Workspace,
+    snapshot: &ProjectSnapshot,
+    page: &str,
+) -> Result<Option<String>> {
+    let Some(rec) = snapshot.page(page) else {
+        return Ok(Some(format!("page {page} does not exist")));
+    };
+    let path = format!("src/pages/{}.tsx", rec.component);
+    if !snapshot
+        .owned
+        .iter()
+        .any(|o| o.path == path && o.region.is_none())
+        || ws.current(&path)?.is_none()
+    {
+        return Ok(Some(format!("{path} is missing or not owned")));
+    }
+    let contexts: Vec<&ContextRecord> = snapshot
+        .contexts
+        .iter()
+        .filter(|c| c.consumers.iter().any(|p| p == page))
+        .collect();
+    ws.set(
+        &path,
+        None,
+        emit::page_tsx_with_contexts(&rec.component, &rec.id, &rec.label, &contexts),
+    )?;
+    Ok(None)
+}
+
 /// Renders the component of a generated page element from the model.
 fn render_element(dir: &Path, snapshot: &ProjectSnapshot, id: &ElementId) -> Result<String> {
     let rec = snapshot.element(id).expect("element is in the model");
@@ -947,6 +1001,7 @@ pub fn prepare(dir: &Path, plan: &Plan, conversation_id: &str) -> Result<Prepare
             Precondition::RevisionIs { revision } => snapshot.revision == *revision,
             Precondition::ElementExists { id } => snapshot.element(id).is_some(),
             Precondition::ElementAbsent { id } => snapshot.element(id).is_none(),
+            Precondition::ContextAbsent { id } => snapshot.context(id).is_none(),
             Precondition::PageExists { page } => snapshot.page_exists(page),
             Precondition::PageAbsent { page } => !snapshot.page_exists(page),
             Precondition::StyleValueIs {
@@ -1486,6 +1541,73 @@ pub fn prepare(dir: &Path, plan: &Plan, conversation_id: &str) -> Result<Prepare
                         .insert(e.property.css_name().to_string(), e.value.clone());
                 }
                 focus = Some((target.clone(), kind));
+            }
+            Operation::CreateContext {
+                id,
+                label,
+                name,
+                shape,
+                initial,
+                scope,
+            } => {
+                if !emit::is_context_id(id)
+                    || !emit::is_context_name(name)
+                    || emit::context_names(label).as_ref() != Some(&(id.clone(), name.clone()))
+                    || label.chars().count() > emit::MAX_LABEL_CHARS
+                {
+                    return unsupported(format!("invalid context id, name or label: {id} / {name}"));
+                }
+                if let Err(message) = emit::validate_initial(*shape, initial) {
+                    return unsupported(message);
+                }
+                if snapshot.context(id).is_some() {
+                    return conflict(format!("context {id} already exists"));
+                }
+                if snapshot
+                    .contexts
+                    .iter()
+                    .any(|c| c.name.eq_ignore_ascii_case(name))
+                {
+                    return conflict(format!("a context file named {name} already exists"));
+                }
+                let path = format!("src/context/{name}.tsx");
+                if snapshot.owned.iter().any(|o| o.path == path) || ws.current(&path)?.is_some() {
+                    return conflict(format!("{path} already exists or is owned"));
+                }
+                snapshot.contexts.push(ContextRecord {
+                    id: id.clone(),
+                    label: label.clone(),
+                    name: name.clone(),
+                    shape: *shape,
+                    initial: initial.clone(),
+                    scope: *scope,
+                    consumers: Vec::new(),
+                });
+                ws.set(&path, None, emit::context_tsx(name, *shape, initial))?;
+                if let Some(reason) = refresh_providers(&mut ws, &snapshot)? {
+                    return conflict(reason);
+                }
+            }
+            Operation::AddContextConsumer { context, page } => {
+                let Some(rec) = snapshot.contexts.iter_mut().find(|c| &c.id == context) else {
+                    return conflict(format!("context {context} no longer exists"));
+                };
+                if rec.consumers.iter().any(|p| p == page) {
+                    return conflict(format!("page {page} already reads context {context}"));
+                }
+                if snapshot.pages.iter().all(|p| &p.id != page) {
+                    return conflict(format!("page {page} no longer exists"));
+                }
+                snapshot
+                    .contexts
+                    .iter_mut()
+                    .find(|c| &c.id == context)
+                    .expect("context was just found")
+                    .consumers
+                    .push(page.clone());
+                if let Some(reason) = refresh_page(&mut ws, &snapshot, page)? {
+                    return conflict(reason);
+                }
             }
             other => return unsupported(format!("operation not supported yet: {other:?}")),
         }

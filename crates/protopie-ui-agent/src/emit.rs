@@ -4,7 +4,9 @@
 //! verbatim. They always pass through one of the escaping helpers here, and
 //! identifiers, paths and component names are validated separately.
 
-use crate::contracts::{ElementContent, ElementId, ElementKind, Placement};
+use crate::contracts::{
+    ContextRecord, ElementContent, ElementId, ElementKind, InitialValue, Placement, StateShape,
+};
 use std::collections::BTreeMap;
 
 /// Longest label the emitter accepts.
@@ -589,6 +591,203 @@ pub fn layout_top_region(components: &[String]) -> String {
     out
 }
 
+// ------------------------------------------------------------------ contexts
+
+/// Longest context ID the emitter accepts.
+pub const MAX_CONTEXT_ID_CHARS: usize = 40;
+/// Longest number literal (digits only) accepted as an initial value.
+const MAX_NUMBER_DIGITS: usize = 15;
+
+/// ID (`selected_doctor`) and identifier stem (`SelectedDoctor`) of a context
+/// derived from its label: the label's ASCII letter and digit runs, each
+/// capitalised (rest lowercase) and joined. `None` when no word remains, the
+/// first word starts with a digit, or the ID is too long; the planner then
+/// rejects the label instead of inventing a name.
+pub fn context_names(label: &str) -> Option<(String, String)> {
+    let words: Vec<&str> = label
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let first = words.first()?;
+    if first.starts_with(|c: char| c.is_ascii_digit()) {
+        return None;
+    }
+    let id = words
+        .iter()
+        .map(|w| w.to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join("_");
+    if id.chars().count() > MAX_CONTEXT_ID_CHARS {
+        return None;
+    }
+    let name: String = words
+        .iter()
+        .map(|w| {
+            let (head, rest) = w.split_at(1);
+            format!("{}{}", head.to_ascii_uppercase(), rest.to_ascii_lowercase())
+        })
+        .collect();
+    Some((id, name))
+}
+
+/// True for an ID [`context_names`] can produce.
+pub fn is_context_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.chars().count() <= MAX_CONTEXT_ID_CHARS
+        && !id.starts_with(|c: char| c.is_ascii_digit() || c == '_')
+        && !id.ends_with('_')
+        && !id.contains("__")
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
+/// True for an identifier stem [`context_names`] can produce.
+pub fn is_context_name(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_uppercase())
+        && name.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// Local variable of a page that reads the context `name`.
+pub fn context_variable(name: &str) -> String {
+    let mut chars = name.chars();
+    let head = chars.next().map(|c| c.to_ascii_lowercase());
+    format!("{}{}Value", head.unwrap_or('x'), chars.as_str())
+}
+
+/// Initial value for `shape` from the user's free text, or why it is invalid.
+/// `OptionalText` has no initial text: it starts unset.
+pub fn parse_initial(shape: StateShape, text: &str) -> Result<InitialValue, String> {
+    match shape {
+        StateShape::Text => clean_text(text, MAX_TEXT_CHARS)
+            .map(|value| InitialValue::Text { value })
+            .ok_or_else(|| format!("That needs 1 to {MAX_TEXT_CHARS} characters on one line.")),
+        StateShape::Number => {
+            parse_number(text).map(|value| InitialValue::Number { value })
+        }
+        StateShape::Flag => match text.trim().to_lowercase().as_str() {
+            "true" | "yes" => Ok(InitialValue::Flag { value: true }),
+            "false" | "no" => Ok(InitialValue::Flag { value: false }),
+            _ => Err("Answer yes or no (or true or false).".into()),
+        },
+        StateShape::OptionalText => Ok(InitialValue::Unset),
+    }
+}
+
+/// Canonical decimal literal of `text`: an optional minus sign, digits and an
+/// optional fraction, without leading zeros (which TypeScript rejects).
+fn parse_number(text: &str) -> Result<String, String> {
+    let bad = || "Give a plain number such as 3, -2 or 0.5.".to_string();
+    let text = text.trim();
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    let (whole, fraction) = match digits.split_once('.') {
+        Some((w, f)) => (w, Some(f)),
+        None => (digits, None),
+    };
+    let all_digits = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit());
+    if !all_digits(whole)
+        || fraction.is_some_and(|f| !all_digits(f))
+        || whole.len() > MAX_NUMBER_DIGITS
+        || fraction.is_some_and(|f| f.len() > MAX_NUMBER_DIGITS)
+    {
+        return Err(bad());
+    }
+    let whole = whole.trim_start_matches('0');
+    let whole = if whole.is_empty() { "0" } else { whole };
+    let literal = match fraction {
+        Some(f) => format!("{whole}.{f}"),
+        None => whole.to_string(),
+    };
+    let zero = literal.bytes().all(|b| b == b'0' || b == b'.');
+    Ok(if negative && !zero {
+        format!("-{literal}")
+    } else {
+        literal
+    })
+}
+
+/// Checks that `initial` is a valid initial value of `shape`. The emitter
+/// never writes one that fails here.
+pub fn validate_initial(shape: StateShape, initial: &InitialValue) -> Result<(), String> {
+    let ok = match (shape, initial) {
+        (StateShape::Text, InitialValue::Text { value }) => {
+            clean_text(value, MAX_TEXT_CHARS).as_deref() == Some(value.as_str())
+        }
+        (StateShape::Number, InitialValue::Number { value }) => {
+            parse_number(value).as_deref() == Ok(value.as_str())
+        }
+        (StateShape::Flag, InitialValue::Flag { .. }) => true,
+        (StateShape::OptionalText, InitialValue::Unset) => true,
+        _ => false,
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err("the initial value does not fit the state's shape".into())
+    }
+}
+
+/// Source of a context file (wholly owned): the context, whose provider
+/// holds one signal created from the initial value. The context object is
+/// the provider in Solid 2; consumers read it with `useContext`.
+pub fn context_tsx(name: &str, shape: StateShape, initial: &InitialValue) -> String {
+    let ty = shape.ts_type();
+    let signal = match initial {
+        InitialValue::Text { value } => format!("createSignal<string>({})", tsx_string_literal(value)),
+        InitialValue::Number { value } => format!("createSignal<number>({value})"),
+        InitialValue::Flag { value } => format!("createSignal<boolean>({value})"),
+        InitialValue::Unset => "createSignal<string | undefined>()".to_string(),
+    };
+    format!(
+        "import {{ createContext, createSignal }} from \"solid-js\";\nimport type {{ ParentProps, Signal }} from \"solid-js\";\n\nexport const {name}Context = createContext<Signal<{ty}>>();\n\nexport function {name}Provider(props: ParentProps) {{\n\treturn (\n\t\t<{name}Context value={{{signal}}}>{{props.children}}</{name}Context>\n\t);\n}}\n"
+    )
+}
+
+/// Body of the `providers` region of `App.tsx`: one import per context and the
+/// `Providers` component wrapping the layout, first context outermost. No
+/// contexts reproduce the template's body exactly.
+pub fn providers_region(contexts: &[&ContextRecord]) -> String {
+    let mut out = String::new();
+    for c in contexts {
+        out.push_str(&format!(
+            "import {{ {n}Provider }} from \"./context/{n}\";\n",
+            n = c.name
+        ));
+    }
+    if !contexts.is_empty() {
+        out.push('\n');
+    }
+    out.push_str("function Providers(props: ParentProps) {\n");
+    if contexts.is_empty() {
+        out.push_str("\treturn <>{props.children}</>;\n}\n");
+        return out;
+    }
+    out.push_str("\treturn (\n");
+    for (depth, c) in contexts.iter().enumerate() {
+        out.push_str(&format!("{}<{}Provider>\n", "\t".repeat(depth + 2), c.name));
+    }
+    out.push_str(&format!("{}{{props.children}}\n", "\t".repeat(contexts.len() + 2)));
+    for (depth, c) in contexts.iter().enumerate().rev() {
+        out.push_str(&format!("{}</{}Provider>\n", "\t".repeat(depth + 2), c.name));
+    }
+    out.push_str("\t);\n}\n");
+    out
+}
+
+/// Names of the contexts a `providers` region body imports, in order.
+pub fn provider_names(body: &str) -> Vec<String> {
+    body.lines()
+        .filter_map(|l| {
+            let rest = l.strip_prefix("import { ")?;
+            let (name, rest) = rest.split_once("Provider } from \"./context/")?;
+            (rest == format!("{name}\";")).then(|| name.to_string())
+        })
+        .collect()
+}
+
 // ------------------------------------------------------------------ pages
 
 /// Longest page slug (and so route segment) the emitter accepts.
@@ -642,10 +841,55 @@ pub fn page_path(slug: &str) -> String {
 
 /// Source of a generated page. Wholly owned and regenerated from the model.
 pub fn page_tsx(name: &str, id: &str, label: &str) -> String {
-    format!(
-        "import styles from \"./{name}.module.css\";\n\nexport default function {name}() {{\n\treturn (\n\t\t<main data-protopie-id=\"{id}\" class={{styles.page}}>\n\t\t\t<h1 class={{styles.title}}>{}</h1>\n\t\t</main>\n\t);\n}}\n",
+    page_tsx_with_contexts(name, id, label, &[])
+}
+
+/// Like [`page_tsx`], additionally displaying the value of every context in
+/// `contexts` (the contexts this page reads, in model order).
+pub fn page_tsx_with_contexts(
+    name: &str,
+    id: &str,
+    label: &str,
+    contexts: &[&ContextRecord],
+) -> String {
+    let mut out = String::new();
+    if !contexts.is_empty() {
+        out.push_str("import { useContext } from \"solid-js\";\n");
+    }
+    out.push_str(&format!("import styles from \"./{name}.module.css\";\n"));
+    for c in contexts {
+        out.push_str(&format!(
+            "import {{ {n}Context }} from \"../context/{n}\";\n",
+            n = c.name
+        ));
+    }
+    out.push_str(&format!("\nexport default function {name}() {{\n"));
+    for c in contexts {
+        out.push_str(&format!(
+            "\tconst [{v}] = useContext({n}Context);\n",
+            v = context_variable(&c.name),
+            n = c.name
+        ));
+    }
+    out.push_str(&format!(
+        "\treturn (\n\t\t<main data-protopie-id=\"{id}\" class={{styles.page}}>\n\t\t\t<h1 class={{styles.title}}>{}</h1>\n",
         tsx_text_child(label)
-    )
+    ));
+    for c in contexts {
+        let v = context_variable(&c.name);
+        let shown = match c.shape {
+            StateShape::Text | StateShape::Number => format!("{v}()"),
+            StateShape::Flag => format!("{v}() ? \"Yes\" : \"No\""),
+            StateShape::OptionalText => format!("{v}() ?? \"none\""),
+        };
+        out.push_str(&format!(
+            "\t\t\t<p data-protopie-context=\"{}\">\n\t\t\t\t{}{{{shown}}}\n\t\t\t</p>\n",
+            c.id,
+            tsx_text_child(&format!("{}: ", c.label)),
+        ));
+    }
+    out.push_str("\t\t</main>\n\t);\n}\n");
+    out
 }
 
 /// Stylesheet of a generated page (CSS module, wholly owned).
@@ -1184,6 +1428,123 @@ function HomeBelow() {
         ));
         assert!(body.contains("function HomeAbove() {\n\treturn (\n\t\t<>\n\t\t\t<Form2 />\n\t\t</>\n\t);\n}"));
         assert!(body.contains("\t\t\t<Form1 />\n\t\t\t<Footer1 />\n"));
+    }
+
+    #[test]
+    fn context_names_are_derived_from_ascii_words_only() {
+        let ok = |label: &str| context_names(label);
+        assert_eq!(
+            ok("selected doctor"),
+            Some(("selected_doctor".into(), "SelectedDoctor".into()))
+        );
+        assert_eq!(ok("API key!"), Some(("api_key".into(), "ApiKey".into())));
+        assert_eq!(ok("Is Open"), Some(("is_open".into(), "IsOpen".into())));
+        assert_eq!(ok("doctor 2"), Some(("doctor_2".into(), "Doctor2".into())));
+        for bad in ["", "   ", "!!!", "3 doctors", "\u{e9}\u{e9}", &"x".repeat(41)] {
+            assert_eq!(ok(bad), None, "{bad:?}");
+        }
+        assert!(is_context_id("selected_doctor") && is_context_name("SelectedDoctor"));
+        for bad in ["", "_a", "a_", "a__b", "A", "1a", "a-b"] {
+            assert!(!is_context_id(bad), "{bad:?}");
+        }
+        for bad in ["", "selected", "A b", "A-b"] {
+            assert!(!is_context_name(bad), "{bad:?}");
+        }
+        assert_eq!(context_variable("SelectedDoctor"), "selectedDoctorValue");
+    }
+
+    #[test]
+    fn initial_values_are_validated_per_shape() {
+        assert_eq!(
+            parse_initial(StateShape::Text, "  Dr. Rao "),
+            Ok(InitialValue::Text { value: "Dr. Rao".into() })
+        );
+        assert!(parse_initial(StateShape::Text, "").is_err());
+        assert!(parse_initial(StateShape::Text, "a\nb").is_err());
+        for (text, want) in [
+            ("3", "3"),
+            ("007", "7"),
+            ("-2", "-2"),
+            ("-0", "0"),
+            ("0.50", "0.50"),
+            ("00.5", "0.5"),
+            (" 12 ", "12"),
+        ] {
+            assert_eq!(
+                parse_initial(StateShape::Number, text),
+                Ok(InitialValue::Number { value: want.into() }),
+                "{text:?}"
+            );
+        }
+        for bad in ["", "-", "1e5", "0x10", "1.", ".5", "1,5", "NaN", "--1", "+1", "1234567890123456"] {
+            assert!(parse_initial(StateShape::Number, bad).is_err(), "{bad:?}");
+        }
+        for (text, want) in [("yes", true), ("TRUE", true), ("no", false), ("False", false)] {
+            assert_eq!(
+                parse_initial(StateShape::Flag, text),
+                Ok(InitialValue::Flag { value: want })
+            );
+        }
+        assert!(parse_initial(StateShape::Flag, "maybe").is_err());
+        assert_eq!(
+            parse_initial(StateShape::OptionalText, "ignored"),
+            Ok(InitialValue::Unset)
+        );
+        // The emitter's last line of defense rejects mismatches and non-canonical numbers.
+        assert!(validate_initial(StateShape::Number, &InitialValue::Number { value: "007".into() }).is_err());
+        assert!(validate_initial(StateShape::Number, &InitialValue::Text { value: "1".into() }).is_err());
+        assert!(validate_initial(StateShape::Flag, &InitialValue::Unset).is_err());
+        assert!(validate_initial(StateShape::OptionalText, &InitialValue::Unset).is_ok());
+    }
+
+    fn record(name: &str, label: &str, shape: StateShape, initial: InitialValue) -> ContextRecord {
+        ContextRecord {
+            id: name.to_lowercase(),
+            label: label.into(),
+            name: name.into(),
+            shape,
+            initial,
+            scope: crate::contracts::ContextScope::AllPages,
+            consumers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn context_files_escape_values_and_providers_round_trip() {
+        let hostile = "a \"b\" </Context> ${x}";
+        let tsx = context_tsx(
+            "Hostile",
+            StateShape::Text,
+            &InitialValue::Text { value: hostile.into() },
+        );
+        assert!(tsx.contains(&format!("createSignal<string>({})", tsx_string_literal(hostile))), "{tsx}");
+        assert!(tsx.contains("<HostileContext value={createSignal<string>("), "{tsx}");
+
+        // No contexts reproduce the template's region body exactly.
+        assert_eq!(
+            providers_region(&[]),
+            "function Providers(props: ParentProps) {\n\treturn <>{props.children}</>;\n}\n"
+        );
+        let a = record("Alpha", "alpha", StateShape::Flag, InitialValue::Flag { value: true });
+        let b = record("Beta", "beta", StateShape::Number, InitialValue::Number { value: "1".into() });
+        let body = providers_region(&[&a, &b]);
+        assert_eq!(provider_names(&body), ["Alpha", "Beta"]);
+        assert!(body.contains(
+            "\t\t<AlphaProvider>\n\t\t\t<BetaProvider>\n\t\t\t\t{props.children}\n\t\t\t</BetaProvider>\n\t\t</AlphaProvider>\n"
+        ), "{body}");
+    }
+
+    #[test]
+    fn pages_without_contexts_render_exactly_as_before_and_readers_show_values() {
+        let plain = page_tsx("DoctorsPage", "doctors", "Doctors");
+        assert_eq!(plain, page_tsx_with_contexts("DoctorsPage", "doctors", "Doctors", &[]));
+        assert!(!plain.contains("useContext"));
+        let c = record("SelectedDoctor", "selected \"doctor\"", StateShape::Text, InitialValue::Text { value: "x".into() });
+        let with = page_tsx_with_contexts("DoctorsPage", "doctors", "Doctors", &[&c]);
+        assert!(with.starts_with("import { useContext } from \"solid-js\";\n"), "{with}");
+        assert!(with.contains("import { SelectedDoctorContext } from \"../context/SelectedDoctor\";"), "{with}");
+        assert!(with.contains("const [selectedDoctorValue] = useContext(SelectedDoctorContext);"), "{with}");
+        assert!(with.contains("{\"selected \\\"doctor\\\": \"}{selectedDoctorValue()}"), "{with}");
     }
 
     #[test]

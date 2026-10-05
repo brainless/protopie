@@ -458,6 +458,27 @@ pub fn plan_answer(answer: &Answer, project: &ProjectSnapshot, session: &Session
                 ResolveOutcome::Resolved { .. } => conflict("This move no longer applies."),
             };
         }
+        Continuation::ProvideContext { draft, field } => {
+            let given = match (&answer.choice, field) {
+                (AnswerChoice::Text { text }, ContextField::Initial) => {
+                    crate::context::Given::Text(text)
+                }
+                (_, ContextField::Initial) => return reask(question, "Please answer in words."),
+                (choice, _) => match match_option(question, choice) {
+                    Some(chosen) => crate::context::Given::Option(chosen.key.as_str()),
+                    None => return reask(question, "That is not one of the options."),
+                },
+            };
+            if draft.missing() != Some(*field) {
+                return conflict("This question no longer needs an answer.");
+            }
+            return match crate::context::with_answer(draft, *field, given, project) {
+                Ok(next) => {
+                    crate::context::plan_context(&next, project, session, vec![question.id.clone()])
+                }
+                Err(why) => reask(question, &why),
+            };
+        }
         _ => {}
     }
     let Some(item_id) = question.continuation.item() else {
@@ -640,7 +661,8 @@ pub fn plan_answer(answer: &Answer, project: &ProjectSnapshot, session: &Session
         | Continuation::ChooseStyleTarget { .. }
         | Continuation::ChoosePlacementAnchor { .. }
         | Continuation::ChooseMoveTarget { .. }
-        | Continuation::ProvideContent { .. } => {
+        | Continuation::ProvideContent { .. }
+        | Continuation::ProvideContext { .. } => {
             unreachable!("filtered out: these continuations have no item")
         }
     }
@@ -659,7 +681,8 @@ pub fn applicable_questions<'a>(
         .filter(|q| match &q.continuation {
             Continuation::ChoosePlacementAnchor { .. }
             | Continuation::ChooseMoveTarget { .. }
-            | Continuation::ProvideContent { .. } => true,
+            | Continuation::ProvideContent { .. }
+            | Continuation::ProvideContext { .. } => true,
             other => other.item().is_some_and(|id| {
                 project.element(id).is_some_and(|e| {
                     e.kind.has_destination() && e.destination == Some(Destination::Unresolved)

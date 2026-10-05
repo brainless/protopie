@@ -8,7 +8,7 @@ use axum::{
 };
 use protopie_api::{
     AbortProjectRequest, AbortProjectResponse, AnswerProjectRequest, ChatRequest, ChatResponse,
-    CreateProjectRequest, CreateProjectResponse, ErrorResponse, ListProjectsResponse,
+    CreateProjectRequest, CreateProjectResponse, ErrorResponse, FileDiff, ListProjectsResponse,
     ModifyOutcome, ModifyProjectRequest, ModifyProjectResponse, ProjectInfo, QuestionSummary,
     CHAT_PATH, HEALTH_PATH, PROJECTS_ABORT_PATH, PROJECTS_ANSWER_PATH, PROJECTS_MODIFY_PATH,
     PROJECTS_PATH,
@@ -111,6 +111,8 @@ async fn modify_project(
                 conversation_id: req.conversation_id.as_deref(),
                 request_id: req.request_id.as_deref(),
                 dry_run: req.dry_run,
+                expected_revision: req.expected_revision,
+                expected_plan_id: req.expected_plan_id.as_deref(),
             },
         )
     })
@@ -146,6 +148,8 @@ async fn answer_project(
                 conversation_id: req.conversation_id.as_deref(),
                 request_id: req.request_id.as_deref(),
                 dry_run: req.dry_run,
+                expected_revision: req.expected_revision,
+                expected_plan_id: req.expected_plan_id.as_deref(),
             },
         )
     })
@@ -208,11 +212,21 @@ fn to_wire(outcome: agent::contracts::ModifyOutcome) -> ModifyOutcome {
     match outcome {
         O::Preview {
             plan_id,
+            base_revision,
             changed_files,
+            diffs,
             follow_up,
         } => ModifyOutcome::Preview {
             plan_id,
+            base_revision,
             changed_files,
+            diffs: diffs
+                .into_iter()
+                .map(|d| FileDiff {
+                    path: d.path,
+                    diff: d.diff,
+                })
+                .collect(),
             questions: question_summaries(follow_up),
         },
         O::Applied {
@@ -550,6 +564,73 @@ mod tests {
         .await;
         assert_eq!(linked["outcome"]["kind"], "applied", "{linked}");
         assert!(read("src/components/TopNav.tsx").contains("https://example.com/docs"));
+    }
+
+    #[tokio::test]
+    async fn preview_carries_diffs_and_apply_is_bound_to_the_previewed_revision() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("projects").to_string_lossy().into_owned();
+        let (_, body) = call(
+            "POST",
+            "/projects",
+            serde_json::json!({"base_path": base, "name": "review"}),
+        )
+        .await;
+        let path = body["path"].as_str().unwrap().to_string();
+        let command = "Need a top navigation";
+        let (_, preview) = call(
+            "POST",
+            "/projects/modify",
+            serde_json::json!({"project_path": path, "command": command, "dry_run": true}),
+        )
+        .await;
+        let outcome = &preview["outcome"];
+        assert_eq!(outcome["kind"], "preview");
+        assert_eq!(outcome["base_revision"], 0);
+        assert!(outcome["diffs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["path"] == "src/components/TopNav.tsx"
+                && d["diff"].as_str().unwrap().contains("+")));
+        assert!(!std::path::Path::new(&path).join("src/components").exists());
+
+        // Another change lands: the preview's revision is stale.
+        call(
+            "POST",
+            "/projects/modify",
+            serde_json::json!({"project_path": path, "command": "Add a footer"}),
+        )
+        .await;
+        let apply = |expected: u64| {
+            serde_json::json!({
+                "project_path": path, "command": command,
+                "expected_revision": expected, "expected_plan_id": outcome["plan_id"],
+            })
+        };
+        let (st, stale) = call("POST", "/projects/modify", apply(0)).await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(stale["outcome"]["kind"], "conflict");
+        assert!(!std::path::Path::new(&path).join("src/components/TopNav.tsx").exists());
+
+        let (_, fresh) = call(
+            "POST",
+            "/projects/modify",
+            serde_json::json!({"project_path": path, "command": command, "dry_run": true}),
+        )
+        .await;
+        let rev = fresh["outcome"]["base_revision"].as_u64().unwrap();
+        let (_, applied) = call(
+            "POST",
+            "/projects/modify",
+            serde_json::json!({
+                "project_path": path, "command": command,
+                "expected_revision": rev, "expected_plan_id": fresh["outcome"]["plan_id"],
+            }),
+        )
+        .await;
+        assert_eq!(applied["outcome"]["kind"], "applied", "{applied}");
+        assert!(std::path::Path::new(&path).join("src/components/TopNav.tsx").exists());
     }
 
     #[tokio::test]

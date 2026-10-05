@@ -11,6 +11,7 @@ use std::path::{Component, Path, PathBuf};
 
 pub mod answer;
 pub mod apply;
+pub mod context;
 pub mod contracts;
 pub mod emit;
 pub mod parser;
@@ -186,6 +187,12 @@ pub struct ModifyOptions<'a> {
     pub request_id: Option<&'a str>,
     /// Prepare only: report what would change and write nothing.
     pub dry_run: bool,
+    /// Apply only against this project revision (the `base_revision` of a
+    /// preview). A project that moved on yields a conflict and writes nothing.
+    pub expected_revision: Option<u64>,
+    /// Apply only a plan with this ID (the `plan_id` of a preview), so what is
+    /// applied is exactly what was inspected.
+    pub expected_plan_id: Option<&'a str>,
 }
 
 /// Applies a natural-language `command` to the project at `project_path` in the
@@ -262,6 +269,15 @@ fn applied_summary(plan: &contracts::Plan, project: Option<&contracts::ProjectSn
                 "Created the {label} page ({}).",
                 emit::page_path(page)
             )),
+            Op::CreateContext { label, name, .. } => Some(format!(
+                "Shared \u{201c}{label}\u{201d} across all pages (src/context/{name}.tsx, mounted in the app layout)."
+            )),
+            Op::AddContextConsumer { context, page } => {
+                let page_label = project
+                    .and_then(|p| p.page_label(page))
+                    .unwrap_or(page.as_str());
+                Some(format!("Page {page_label} now shows {context}."))
+            }
             Op::RegisterRoute { path, .. } => Some(format!("Registered the route {path}.")),
             Op::SetNavigationDestination { item, destination } => {
                 let label = project
@@ -491,8 +507,24 @@ fn run_request(
             })
         }
     };
+    if let Some(expected) = options.expected_revision.filter(|r| *r != snapshot.revision) {
+        return Ok(conflict_result(format!(
+            "The project changed since the preview (revision {expected} is now {}). \
+             Nothing was written; preview the change again.",
+            snapshot.revision
+        )));
+    }
     let session = project::load_session(project_path, conversation_id)?;
     let outcome = plan_with(&snapshot, &session);
+    if let (PlanOutcome::Ready { plan }, Some(expected)) = (&outcome, options.expected_plan_id) {
+        if plan.id != expected {
+            return Ok(conflict_result(
+                "The change to apply is no longer the one that was previewed. \
+                 Nothing was written; preview the change again."
+                    .into(),
+            ));
+        }
+    }
     Ok(match outcome {
         PlanOutcome::Unsupported { rejection } => ModifyResult {
             summary: format!("received: {command}"),
@@ -530,7 +562,16 @@ fn run_request(
                     summary: format!("Preview: {}", applied_summary(&plan, Some(&snapshot))),
                     outcome: ModifyOutcome::Preview {
                         plan_id: plan.id.clone(),
+                        base_revision: prepared.base_revision,
                         changed_files: prepared.files.iter().map(|f| f.path.clone()).collect(),
+                        diffs: prepared
+                            .files
+                            .iter()
+                            .map(|f| contracts::FileDiff {
+                                path: f.path.clone(),
+                                diff: f.diff.clone(),
+                            })
+                            .collect(),
                         follow_up: plan.follow_up.clone(),
                     },
                 },

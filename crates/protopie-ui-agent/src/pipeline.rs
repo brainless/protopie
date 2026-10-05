@@ -322,6 +322,7 @@ pub fn resolve(
         Request::Style(style) => resolve_style(style, project, session),
         Request::AddElement(add) => crate::place::resolve_add(add, project, session),
         Request::MoveElement(mv) => crate::place::resolve_move(mv, project, session),
+        Request::ShareState(share) => crate::context::resolve_share(share, project),
     }
 }
 
@@ -580,6 +581,9 @@ pub fn plan(
         }
         ResolvedRequest::MoveElement { target, position } => {
             crate::place::plan_move(target, position, project, session, Vec::new())
+        }
+        ResolvedRequest::ShareContext { draft } => {
+            crate::context::plan_context(draft, project, session, Vec::new())
         }
         ResolvedRequest::AddNavigationItem { navigation, label } => {
             let item = project.next_id("item");

@@ -26,6 +26,26 @@ pub enum Request {
     AddElement(ElementAddition),
     /// `move the <role> <relation> <anchor>`.
     MoveElement(ElementMove),
+    /// `share the <label> [across pages]`.
+    ShareState(StateSharing),
+}
+
+/// Request to share one piece of state through a Solid context. The parser
+/// carries only what the prompt says: the state's label and, optionally, its
+/// scope. Shape, initial value and consumers are never invented here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateSharing {
+    pub label: Label,
+    /// `None` preserves an omitted scope for the resolver to ask about.
+    pub scope: Option<ShareScope>,
+    /// Complete meaningful command, excluding surrounding whitespace.
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShareScope {
+    /// `across pages`: `span` covers those two words in the original prompt.
+    AllPages { span: Span },
 }
 
 /// Request to add one element, e.g. `Add a form below hero`.
@@ -366,12 +386,11 @@ fn parse_page_creation(input: &str, tokens: &[Token<'_>], span: Span) -> Option<
         })));
     }
 
-    // Punctuation on the final page noun, or a plural `pages`, is malformed page
-    // syntax, not a label. Applies even when no label precedes the noun.
+    // Punctuation (ASCII or not) on the final page noun, or a plural `pages`, is
+    // malformed page syntax, not a label. Applies even when no label precedes
+    // the noun.
     let last = tokens.last().unwrap();
-    let stem = last
-        .text
-        .trim_end_matches(|c: char| c.is_ascii_punctuation());
+    let stem = last.text.trim_end_matches(|c: char| !c.is_alphanumeric());
     if (stem.eq_ignore_ascii_case("page") && last.text.len() != stem.len())
         || stem.eq_ignore_ascii_case("pages")
     {
@@ -430,6 +449,135 @@ fn parse_page_creation(input: &str, tokens: &[Token<'_>], span: Span) -> Option<
             text: input[label_span.start..label_span.end].to_string(),
             span: label_span,
         },
+        span,
+    })))
+}
+
+/// `Share the <label> [across pages]`. The label is a double-quoted literal or
+/// the unquoted words before the first `across`; only the exact clause
+/// `across pages` states a scope, and an omitted scope is preserved.
+fn parse_state_sharing(input: &str, tokens: &[Token<'_>], span: Span) -> Option<ParseOutcome> {
+    if !token_matches(&tokens[0], "share", false) {
+        return None;
+    }
+    let unsupported = |reason, span| Some(ParseOutcome::Unsupported(Unsupported { reason, span }));
+    if tokens.len() == 1 {
+        return unsupported(UnsupportedReason::IncompleteInput, span);
+    }
+    if !token_matches(&tokens[1], "the", false) {
+        return unsupported(UnsupportedReason::UnrecognizedInput, span);
+    }
+    if tokens.len() == 2 {
+        return unsupported(UnsupportedReason::IncompleteInput, span);
+    }
+    let label_start = tokens[2].span.start;
+    let (label, clause_from) = if input[label_start..].starts_with('"') {
+        let (label, close) = match quoted_label(input, label_start, span) {
+            Ok(value) => value,
+            Err(outcome) => return Some(outcome),
+        };
+        if close < span.end && !input[close..].starts_with(char::is_whitespace) {
+            return unsupported(UnsupportedReason::UnrecognizedInput, span);
+        }
+        let from = tokens
+            .iter()
+            .position(|token| token.span.start >= close)
+            .unwrap_or(tokens.len());
+        if from < tokens.len() && !token_matches(&tokens[from], "across", false) {
+            return unsupported(
+                UnsupportedReason::UnsupportedTail,
+                Span {
+                    start: tokens[from].span.start,
+                    end: span.end,
+                },
+            );
+        }
+        (label, from)
+    } else {
+        let across = tokens
+            .iter()
+            .skip(2)
+            .position(|token| token_matches(token, "across", false))
+            .map(|index| index + 2)
+            .unwrap_or(tokens.len());
+        if across == 2 {
+            return unsupported(UnsupportedReason::IncompleteInput, span);
+        }
+        if tokens[2..across]
+            .iter()
+            .any(|token| token.text.contains(['"', '\\', '\'', '“', '‘']))
+        {
+            return unsupported(UnsupportedReason::UnrecognizedInput, span);
+        }
+        if let Some(index) = tokens[2..across]
+            .iter()
+            .position(|t| token_matches(t, "and", false) || token_matches(t, "then", false))
+        {
+            return unsupported(
+                UnsupportedReason::UnsupportedTail,
+                Span {
+                    start: tokens[index + 2].span.start,
+                    end: span.end,
+                },
+            );
+        }
+        let label_span = Span {
+            start: label_start,
+            end: tokens[across - 1].span.end,
+        };
+        (
+            Label {
+                text: input[label_span.start..label_span.end].to_string(),
+                span: label_span,
+            },
+            across,
+        )
+    };
+    if clause_from == tokens.len() {
+        return Some(ParseOutcome::Parsed(Request::ShareState(StateSharing {
+            label,
+            scope: None,
+            span,
+        })));
+    }
+    // `tokens[clause_from]` is `across`.
+    if clause_from + 1 == tokens.len() {
+        return unsupported(UnsupportedReason::IncompleteInput, span);
+    }
+    let noun = &tokens[clause_from + 1];
+    if !token_matches(noun, "pages", false) {
+        let stem = noun
+            .text
+            .trim_end_matches(|c: char| c.is_ascii_punctuation());
+        return if stem.eq_ignore_ascii_case("pages") {
+            unsupported(UnsupportedReason::UnrecognizedInput, span)
+        } else {
+            unsupported(
+                UnsupportedReason::UnrecognizedInput,
+                Span {
+                    start: tokens[clause_from].span.start,
+                    end: span.end,
+                },
+            )
+        };
+    }
+    if clause_from + 2 < tokens.len() {
+        return unsupported(
+            UnsupportedReason::UnsupportedTail,
+            Span {
+                start: tokens[clause_from + 2].span.start,
+                end: span.end,
+            },
+        );
+    }
+    Some(ParseOutcome::Parsed(Request::ShareState(StateSharing {
+        label,
+        scope: Some(ShareScope::AllPages {
+            span: Span {
+                start: tokens[clause_from].span.start,
+                end: noun.span.end,
+            },
+        }),
         span,
     })))
 }
@@ -1113,6 +1261,9 @@ pub fn parse(input: &str) -> ParseOutcome {
     if let Some(outcome) = parse_element_move(&tokens, span) {
         return outcome;
     }
+    if let Some(outcome) = parse_state_sharing(input, &tokens, span) {
+        return outcome;
+    }
     if let Some(outcome) = parse_page_creation(input, &tokens, span) {
         return outcome;
     }
@@ -1179,6 +1330,13 @@ mod tests {
                     assert_valid_span(input, mv.selector.span);
                     assert_valid_span(input, mv.position.span);
                     assert_valid_span(input, mv.position.anchor.span);
+                }
+                Request::ShareState(share) => {
+                    assert_valid_span(input, share.span);
+                    assert_valid_span(input, share.label.span);
+                    if let Some(ShareScope::AllPages { span }) = &share.scope {
+                        assert_valid_span(input, *span);
+                    }
                 }
                 Request::Style(style) => {
                     assert_valid_span(input, style.span);
@@ -1278,6 +1436,77 @@ mod tests {
             let actual = parse(input);
             assert_eq!(actual, expected, "{input:?}");
             assert_all_spans_valid(input, &actual);
+        }
+    }
+
+    fn share(label: &str, label_span: (usize, usize), scope: Option<(usize, usize)>, span: (usize, usize)) -> ParseOutcome {
+        ParseOutcome::Parsed(Request::ShareState(StateSharing {
+            label: Label {
+                text: label.into(),
+                span: Span { start: label_span.0, end: label_span.1 },
+            },
+            scope: scope.map(|(start, end)| ShareScope::AllPages { span: Span { start, end } }),
+            span: Span { start: span.0, end: span.1 },
+        }))
+    }
+
+    fn unsupported_at(reason: UnsupportedReason, start: usize, end: usize) -> ParseOutcome {
+        ParseOutcome::Unsupported(Unsupported {
+            reason,
+            span: Span { start, end },
+        })
+    }
+
+    #[test]
+    fn share_the_state_across_pages_preserves_label_scope_and_spans() {
+        // `Share the selected doctor across pages`: label 10..25, scope 26..38.
+        assert_eq!(
+            parse("Share the selected doctor across pages"),
+            share("selected doctor", (10, 25), Some((26, 38)), (0, 38))
+        );
+        assert_eq!(
+            parse("  SHARE THE Selected   Doctor ACROSS Pages "),
+            share("Selected   Doctor", (12, 29), Some((30, 42)), (2, 42))
+        );
+    }
+
+    #[test]
+    fn share_without_a_scope_preserves_the_omission() {
+        assert_eq!(
+            parse("Share the selected doctor"),
+            share("selected doctor", (10, 25), None, (0, 25))
+        );
+    }
+
+    #[test]
+    fn share_quoted_labels_keep_syntax_words_literal() {
+        assert_eq!(
+            parse("Share the \"across pages\" across pages"),
+            share("across pages", (11, 23), Some((25, 37)), (0, 37))
+        );
+        assert_eq!(
+            parse("Share the \"Café and tea\""),
+            share("Café and tea", (11, 24), None, (0, 25))
+        );
+    }
+
+    #[test]
+    fn share_rejects_incomplete_unsupported_and_malformed_forms() {
+        for (input, expected) in [
+            ("Share", unsupported_at(UnsupportedReason::IncompleteInput, 0, 5)),
+            ("Share the", unsupported_at(UnsupportedReason::IncompleteInput, 0, 9)),
+            ("Share the across pages", unsupported_at(UnsupportedReason::IncompleteInput, 0, 22)),
+            ("Share the doctor across", unsupported_at(UnsupportedReason::IncompleteInput, 0, 23)),
+            // Only `the` introduces the label; other scopes are not supported.
+            ("Share doctor across pages", unsupported_at(UnsupportedReason::UnrecognizedInput, 0, 25)),
+            ("Share the doctor across the app", unsupported_at(UnsupportedReason::UnrecognizedInput, 17, 31)),
+            // Punctuation on syntax words is unsupported, as for page requests.
+            ("Share the doctor across pages.", unsupported_at(UnsupportedReason::UnrecognizedInput, 0, 30)),
+            ("Share the doctor across pages and add a page", unsupported_at(UnsupportedReason::UnsupportedTail, 30, 44)),
+            ("Share the doctor and the nurse across pages", unsupported_at(UnsupportedReason::UnsupportedTail, 17, 43)),
+            ("Share the \"doctor across pages", unsupported_at(UnsupportedReason::IncompleteInput, 0, 30)),
+        ] {
+            assert_eq!(parse(input), expected, "{input:?}");
         }
     }
 
@@ -1649,6 +1878,36 @@ mod tests {
                 "{input:?}"
             );
         }
+    }
+
+    #[test]
+    fn page_creation_rejects_non_ascii_punctuation_on_page_noun() {
+        for input in [
+            "Add a Contact Us page\u{2026}",
+            "Add a Contact Us page\u{3002}",
+            "Add a Contact Us page\u{2019}",
+            "Add a Contact Us page\u{2014}",
+        ] {
+            assert_eq!(
+                parse(input),
+                ParseOutcome::Unsupported(Unsupported {
+                    reason: UnsupportedReason::UnrecognizedInput,
+                    span: Span {
+                        start: 0,
+                        end: input.len()
+                    },
+                }),
+                "{input:?}"
+            );
+        }
+        assert!(matches!(
+            parse("Add a Caf\u{e9} page"),
+            ParseOutcome::Parsed(Request::CreatePage(_))
+        ));
+        assert!(matches!(
+            parse("Add a Contact Us page"),
+            ParseOutcome::Parsed(Request::CreatePage(_))
+        ));
     }
 
     #[test]

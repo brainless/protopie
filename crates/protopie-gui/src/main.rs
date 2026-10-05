@@ -1,5 +1,6 @@
 mod chat;
 mod client;
+mod review;
 mod server;
 
 use std::sync::Arc;

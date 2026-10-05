@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Rust unit, corpus, conversation, recovery, review and hardening tests.
+  # Independent of Node: the generated-build tests are ignored here.
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  # Generates projects from the reference template and runs their own build
+  # (`tsc --noEmit` plus Vite build) with dependencies installed from the
+  # reference lockfile. Release gate for code generation.
+  generated-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: reference/package-lock.json
+      - run: npm ci
+        working-directory: reference
+      - run: cargo test -p protopie-ui-agent --test generated_build -- --ignored --nocapture

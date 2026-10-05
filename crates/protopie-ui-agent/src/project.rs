@@ -42,6 +42,7 @@ const TEMPLATE_REGIONS: &[(&str, &str)] = &[
     ("src/pages/Home.tsx", "hero_1"),
     ("src/pages/Home.tsx", "home-flow"),
     ("src/pages/Home.module.css", "hero_1"),
+    ("src/App.tsx", "providers"),
     ("src/App.tsx", "layout-top"),
     ("src/router.ts", "routes"),
     ("src/index.css", "tokens"),
@@ -398,7 +399,7 @@ mod tests {
             (style.class.as_str(), style.scope),
             ("hero", StyleScope::Instance)
         );
-        assert_eq!(snapshot.owned.len(), 6);
+        assert_eq!(snapshot.owned.len(), 7);
         assert_eq!(style.values.get("padding").map(String::as_str), Some("2rem 1rem"));
         assert_eq!(hero.layout, Some(ContainerLayout::Vertical));
         assert_eq!(snapshot.next_id("hero"), ElementId::new("hero_2"));

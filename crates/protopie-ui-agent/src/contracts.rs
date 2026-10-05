@@ -349,6 +349,139 @@ pub struct PageRecord {
     pub registered: bool,
 }
 
+// ---------------------------------------------------------------- context (Epic 001, T10)
+
+/// Shape of a shared state value. The user picks one; nothing is inferred
+/// from the label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StateShape {
+    /// `string`.
+    Text,
+    /// `number`.
+    Number,
+    /// `boolean`.
+    Flag,
+    /// `string | undefined`; it starts without a value.
+    OptionalText,
+}
+
+impl StateShape {
+    pub fn key(self) -> &'static str {
+        match self {
+            StateShape::Text => "text",
+            StateShape::Number => "number",
+            StateShape::Flag => "flag",
+            StateShape::OptionalText => "optional_text",
+        }
+    }
+
+    /// The TypeScript type of the value.
+    pub fn ts_type(self) -> &'static str {
+        match self {
+            StateShape::Text => "string",
+            StateShape::Number => "number",
+            StateShape::Flag => "boolean",
+            StateShape::OptionalText => "string | undefined",
+        }
+    }
+}
+
+/// Initial value of a shared state, always the user's own answer. `Number`
+/// holds a validated decimal literal, so the model stays `Eq`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InitialValue {
+    Text { value: String },
+    Number { value: String },
+    Flag { value: bool },
+    /// No value yet; only valid for [`StateShape::OptionalText`].
+    Unset,
+}
+
+/// Where a context's provider is mounted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextScope {
+    /// Around the router's root layout, so every page reads the same value.
+    AllPages,
+}
+
+/// One requirement of a context the agent asks for instead of inventing it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextField {
+    Scope,
+    Shape,
+    Initial,
+    Consumers,
+}
+
+/// A context request gathering its requirements. Complete when
+/// [`ContextDraft::missing`] is `None`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextDraft {
+    /// The state's label as the user wrote it.
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ContextScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<StateShape>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial: Option<InitialValue>,
+    /// Pages chosen to display the value, in the order chosen.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub consumers: Vec<String>,
+    /// True once the user said no more pages read it.
+    #[serde(default)]
+    pub consumers_done: bool,
+}
+
+impl ContextDraft {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            scope: None,
+            shape: None,
+            initial: None,
+            consumers: Vec::new(),
+            consumers_done: false,
+        }
+    }
+
+    /// The next requirement still unknown, in the order it is asked.
+    pub fn missing(&self) -> Option<ContextField> {
+        if self.scope.is_none() {
+            Some(ContextField::Scope)
+        } else if self.shape.is_none() {
+            Some(ContextField::Shape)
+        } else if self.initial.is_none() {
+            Some(ContextField::Initial)
+        } else if !self.consumers_done {
+            Some(ContextField::Consumers)
+        } else {
+            None
+        }
+    }
+}
+
+/// A shared state the agent generated: a context file, its provider and the
+/// pages that display it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextRecord {
+    /// Stable ID (`selected_doctor`), derived from the label.
+    pub id: String,
+    pub label: String,
+    /// PascalCase stem of the identifiers and the file (`SelectedDoctor`).
+    pub name: String,
+    pub shape: StateShape,
+    pub initial: InitialValue,
+    pub scope: ContextScope,
+    /// Pages that display the value, in the order they were added.
+    #[serde(default)]
+    pub consumers: Vec<String>,
+}
+
 /// Explicit, read-only view of a project for the pure stages.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectSnapshot {
@@ -368,6 +501,10 @@ pub struct ProjectSnapshot {
     /// Layout of the top level of a page (elements without a parent), when known.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub page_layouts: BTreeMap<String, ContainerLayout>,
+    /// Shared states (Solid contexts) created by the agent, in creation order;
+    /// providers nest in this order, outermost first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contexts: Vec<ContextRecord>,
 }
 
 impl ProjectSnapshot {
@@ -380,7 +517,12 @@ impl ProjectSnapshot {
             id_counters: BTreeMap::new(),
             pages: Vec::new(),
             page_layouts: BTreeMap::new(),
+            contexts: Vec::new(),
         }
+    }
+
+    pub fn context(&self, id: &str) -> Option<&ContextRecord> {
+        self.contexts.iter().find(|c| c.id == id)
     }
 
     /// Known layout of the container holding children of `parent` (the page
@@ -622,6 +764,9 @@ pub enum ResolvedRequest {
         target: ElementId,
         position: Position,
     },
+    /// Share a state through a context. The draft carries what the prompt
+    /// said; the planner asks for the rest.
+    ShareContext { draft: ContextDraft },
 }
 
 // ---------------------------------------------------------------- plan
@@ -691,11 +836,25 @@ pub enum Operation {
         item: ElementId,
         destination: Destination,
     },
+    /// Creates the context file and mounts its provider in the app layout.
+    CreateContext {
+        id: String,
+        label: String,
+        name: String,
+        shape: StateShape,
+        initial: InitialValue,
+        scope: ContextScope,
+    },
+    /// Makes `page` display the value of `context`.
+    AddContextConsumer { context: String, page: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Precondition {
+    ContextAbsent {
+        id: String,
+    },
     RevisionIs {
         revision: u64,
     },
@@ -791,6 +950,11 @@ pub enum Continuation {
         existing_page: String,
         alternative: String,
     },
+    /// The answer supplies the `field` the context `draft` still lacks.
+    ProvideContext {
+        draft: ContextDraft,
+        field: ContextField,
+    },
 }
 
 impl Continuation {
@@ -807,7 +971,8 @@ impl Continuation {
             | Continuation::ChooseStyleTarget { .. }
             | Continuation::ChoosePlacementAnchor { .. }
             | Continuation::ChooseMoveTarget { .. }
-            | Continuation::ProvideContent { .. } => None,
+            | Continuation::ProvideContent { .. }
+            | Continuation::ProvideContext { .. } => None,
         }
     }
 
@@ -818,6 +983,10 @@ impl Continuation {
             Continuation::EnterUrl { .. }
                 | Continuation::NamePage { .. }
                 | Continuation::ProvideContent { .. }
+                | Continuation::ProvideContext {
+                    field: ContextField::Initial,
+                    ..
+                }
         )
     }
 }
@@ -910,6 +1079,13 @@ pub enum ResolveOutcome {
     Unsupported { rejection: Rejection },
 }
 
+/// A proposed change to one code file, as a unified-style line diff.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileDiff {
+    pub path: String,
+    pub diff: String,
+}
+
 /// What `modify` reports. Extends [`PlanOutcome`] with application results.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -917,7 +1093,14 @@ pub enum ModifyOutcome {
     /// Dry run: the plan was prepared but nothing was written.
     Preview {
         plan_id: String,
+        /// Project revision the plan was prepared against. Pass it back as
+        /// the expected revision to apply exactly this preview.
+        #[serde(default)]
+        base_revision: u64,
         changed_files: Vec<String>,
+        /// Proposed code changes, one entry per changed file.
+        #[serde(default)]
+        diffs: Vec<FileDiff>,
         follow_up: Vec<Question>,
     },
     Applied {

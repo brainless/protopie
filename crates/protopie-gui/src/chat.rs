@@ -10,6 +10,7 @@ use akar_layout::{length, Dimension, Display, FlexDirection, Layout, NodeId, Siz
 use protopie_api::ProjectInfo;
 
 use crate::client::{ApiClient, Event};
+use crate::review::{Choice, Review, Sent};
 
 /// Folder new projects are created in (the server lists its own, equal, constant).
 const PROJECTS_BASE_PATH: &str = ".projects";
@@ -29,6 +30,10 @@ const MODAL_NS: u64 = 0xD1A1_06;
 const BUF_LABEL: u64 = 0xC0DE_0001;
 const BUF_CHEVRON: u64 = 0xC0DE_0002;
 const BUF_ROW: u64 = 0xC0DE_1000;
+const BUF_CHOICE: u64 = 0xC0DE_2000;
+const CHOICE_H: f32 = 30.0;
+const CHOICE_GAP: f32 = 8.0;
+const CHOICE_PAD_X: f32 = 14.0;
 
 /// Dropdown rows before the project list: "New Project" and "No project".
 const NEW_ROW: usize = 0;
@@ -77,6 +82,14 @@ pub struct ChatView {
     scroll_y: f32,
     pending: usize,
     stick_to_bottom: bool,
+    /// Project the review buttons act on.
+    review_project: Option<ProjectInfo>,
+    /// Plan/diff preview or question options awaiting a click.
+    review: Review,
+    /// Rows the review buttons wrapped into at the last layout.
+    review_rows: usize,
+    /// The request whose preview is shown, repeated to apply it.
+    last_sent: Option<Sent>,
 }
 
 fn rgba(c: u32) -> [f32; 4] {
@@ -216,7 +229,8 @@ impl ChatView {
             messages: vec![Message {
                 role: Role::Agent,
                 text: "Hi! Pick a project and describe a UI change, e.g. \"Need a top navigation\" then \"Add Contact Us\". \
-                       When I ask a question, reply with an option number or its text. \
+                       I show a diff first: choose Apply changes or Discard. \
+                       When I ask a question, click an option or reply with its number or text. \
                        Without a project I just echo your message."
                     .into(),
                 buffer: None,
@@ -226,6 +240,10 @@ impl ChatView {
             scroll_y: 0.0,
             pending: 0,
             stick_to_bottom: true,
+            review_project: None,
+            review: Review::default(),
+            review_rows: 0,
+            last_sent: None,
         }
     }
 
@@ -259,10 +277,61 @@ impl ChatView {
             }
             return;
         }
+        // A new message replaces whatever was waiting for a decision.
+        self.review = Review::default();
         self.pending += 1;
         match &self.selected {
-            Some(p) => self.client.modify(p.path.clone(), prompt),
+            // Commands are previewed first; the diff is applied on request.
+            Some(p) => {
+                self.review_project = Some(p.clone());
+                let sent = Sent::Command(prompt);
+                self.last_sent = Some(sent.clone());
+                self.client.send(p.path.clone(), sent, None)
+            }
             None => self.client.chat(prompt),
+        }
+    }
+
+    /// Acts on a clicked review button.
+    fn choose(&mut self, button: usize) {
+        let Some(project) = self.review_project.clone() else {
+            return;
+        };
+        let Some(b) = self.review.buttons.get(button).cloned() else {
+            return;
+        };
+        let expected = self.review.expected.clone();
+        // The buttons are rebuilt from the next reply.
+        self.review = Review::default();
+        match b.choice {
+            Choice::Discard => {
+                self.push(
+                    Role::Agent,
+                    "Discarded the preview. Nothing was changed.".into(),
+                );
+            }
+            Choice::Apply => {
+                let Some(expected) = expected else { return };
+                self.pending += 1;
+                self.push(Role::User, b.label);
+                match self.last_sent.clone() {
+                    Some(sent) => self.client.send(project.path, sent, Some(expected)),
+                    None => self.pending -= 1,
+                }
+            }
+            Choice::Answer {
+                question_id,
+                option_key,
+            } => {
+                self.push(Role::User, b.label);
+                self.pending += 1;
+                let sent = Sent::Answer {
+                    question_id,
+                    option_key,
+                };
+                self.last_sent = Some(sent.clone());
+                self.client.send(project.path, sent, None);
+            }
         }
     }
 
@@ -273,6 +342,22 @@ impl ChatView {
                 match result {
                     Ok(reply) => self.push(Role::Agent, reply),
                     Err(e) => self.push(Role::Error, format!("Request failed: {e}")),
+                }
+            }
+            Event::Modified { applied, result } => {
+                self.pending = self.pending.saturating_sub(1);
+                match result {
+                    Ok(response) => {
+                        self.push(Role::Agent, response.display_text());
+                        self.review = crate::review::review_for(&response);
+                        if applied {
+                            self.last_sent = None;
+                        }
+                    }
+                    Err(e) => {
+                        self.review = Review::default();
+                        self.push(Role::Error, format!("Request failed: {e}"));
+                    }
                 }
             }
             Event::Projects(Ok(list)) => {
@@ -325,7 +410,9 @@ impl ChatView {
         }
 
         self.draw_header(core);
-        self.draw_messages(core);
+        let reserved = self.layout_review(size[0]);
+        self.draw_messages(core, reserved);
+        self.draw_review(core, size, reserved);
 
         // Input bar.
         let bar_y = size[1] - INPUT_BAR_H;
@@ -731,8 +818,92 @@ impl ChatView {
         }
     }
 
-    fn draw_messages(&mut self, core: &mut AkarCore) {
-        let area = self.layout.rect(self.messages_area);
+    fn button_width(label: &str) -> f32 {
+        label.chars().count() as f32 * THEME.font_size_base * 0.6 + 2.0 * CHOICE_PAD_X
+    }
+
+    /// Wraps the review buttons into rows for `width`; returns the height the
+    /// strip takes above the input bar.
+    fn layout_review(&mut self, width: f32) -> f32 {
+        if self.review.buttons.is_empty() {
+            self.review_rows = 0;
+            return 0.0;
+        }
+        let (mut rows, mut x) = (1, CHOICE_GAP);
+        for b in &self.review.buttons {
+            let w = Self::button_width(&b.label);
+            if x + w + CHOICE_GAP > width && x > CHOICE_GAP {
+                rows += 1;
+                x = CHOICE_GAP;
+            }
+            x += w + CHOICE_GAP;
+        }
+        self.review_rows = rows;
+        rows as f32 * (CHOICE_H + CHOICE_GAP) + CHOICE_GAP
+    }
+
+    /// Buttons for the pending preview or question, above the input bar.
+    fn draw_review(&mut self, core: &mut AkarCore, size: [f32; 2], reserved: f32) {
+        if reserved == 0.0 {
+            return;
+        }
+        let top = size[1] - INPUT_BAR_H - reserved;
+        core.draw_list
+            .push_quad(quad([0.0, top, size[0], reserved], THEME.base_200, 0.0));
+        let (mut x, mut y) = (CHOICE_GAP, top + CHOICE_GAP);
+        let mut clicked = None;
+        for (i, b) in self.review.buttons.iter().enumerate() {
+            let w = Self::button_width(&b.label);
+            if x + w + CHOICE_GAP > size[0] && x > CHOICE_GAP {
+                x = CHOICE_GAP;
+                y += CHOICE_H + CHOICE_GAP;
+            }
+            let rect = [x, y, w, CHOICE_H];
+            let hovered = core.input.is_hovering(rect);
+            let primary = b.choice == Choice::Apply;
+            core.draw_list.push_quad(QuadCall {
+                border_color: rgba(THEME.base_300),
+                border_width: THEME.border_width,
+                ..quad(
+                    rect,
+                    match (primary, hovered) {
+                        (true, _) => THEME.primary,
+                        (false, true) => THEME.base_300,
+                        (false, false) => THEME.base_100,
+                    },
+                    THEME.radius_field,
+                )
+            });
+            Self::draw_text(
+                core,
+                BUF_CHOICE + i as u64,
+                &b.label,
+                THEME.font_size_base,
+                [
+                    x + CHOICE_PAD_X,
+                    y + (CHOICE_H - THEME.font_size_base * 1.2) / 2.0,
+                ],
+                rect,
+                if primary {
+                    THEME.primary_content
+                } else {
+                    THEME.base_content
+                },
+                0.0,
+            );
+            if core.input.is_clicked(rect) {
+                clicked = Some(i);
+            }
+            x += w + CHOICE_GAP;
+        }
+        if let Some(i) = clicked {
+            self.choose(i);
+        }
+    }
+
+    fn draw_messages(&mut self, core: &mut AkarCore, reserved_bottom: f32) {
+        let mut area = self.layout.rect(self.messages_area);
+        area[3] = (area[3] - reserved_bottom).max(0.0);
         let max_bubble_w = area[2] * 0.82;
         let max_text_w = max_bubble_w - 2.0 * BUBBLE_PAD_X;
         let metrics = glyphon::Metrics::new(THEME.font_size_base, THEME.font_size_base * 1.4);
