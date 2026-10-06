@@ -1110,6 +1110,10 @@ pub enum ModifyOutcome {
     },
     NeedsClarification {
         questions: Vec<Question>,
+        /// True when a committed question-only plan stored these questions in
+        /// the conversation. False for parser/resolver suggestions.
+        #[serde(default, skip_serializing_if = "is_false")]
+        persisted: bool,
     },
     NoChange {
         reason: String,
@@ -1122,6 +1126,10 @@ pub enum ModifyOutcome {
     Conflict {
         reason: String,
     },
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Structured outcome plus the human-readable summary for chat.
@@ -1214,7 +1222,8 @@ mod tests {
         });
         assert_eq!(
             serde_json::to_value(&ModifyOutcome::NeedsClarification {
-                questions: vec![question]
+                questions: vec![question],
+                persisted: false,
             })
             .unwrap()["kind"],
             "needs_clarification"

@@ -353,6 +353,7 @@ fn applied_result(
             summary: applied_summary(plan, project) + summary_suffix,
             outcome: ModifyOutcome::NeedsClarification {
                 questions: plan.follow_up.clone(),
+                persisted: true,
             },
         };
     }
@@ -368,6 +369,21 @@ fn applied_result(
             follow_up: plan.map(|p| p.follow_up.clone()).unwrap_or_default(),
         },
     }
+}
+
+fn replay_with_current_questions(
+    mut result: ModifyResult,
+    project_path: &Path,
+    conversation_id: &str,
+) -> Result<ModifyResult> {
+    if let ModifyOutcome::NeedsClarification { questions, persisted } = &mut result.outcome {
+        let session = project::load_session(project_path, conversation_id)?;
+        *persisted = !questions.is_empty()
+            && questions.iter().all(|question| {
+                session.pending_questions.iter().any(|pending| pending.id == question.id)
+            });
+    }
+    Ok(result)
 }
 
 fn conflict_result(reason: String) -> ModifyResult {
@@ -481,13 +497,13 @@ fn run_request(
                     "request id was already used for a different command or has no recorded command".into(),
                 ));
             }
-            return Ok(applied_result(
+            return replay_with_current_questions(applied_result(
                 record.plan_id,
                 record.changed_files,
                 record.plan.as_ref(),
                 loaded_snapshot(project_path).as_ref(),
                 " (already applied)",
-            ));
+            ), project_path, conversation_id);
         }
     }
     let snapshot = match project::load_project(project_path)? {
@@ -532,30 +548,16 @@ fn run_request(
         },
         PlanOutcome::NeedsClarification { questions } => ModifyResult {
             summary: questions_summary(&questions),
-            outcome: ModifyOutcome::NeedsClarification { questions },
+            outcome: ModifyOutcome::NeedsClarification { questions, persisted: false },
         },
         PlanOutcome::NoChange { reason, follow_up } => ModifyResult {
             summary: reason.clone(),
             outcome: ModifyOutcome::NoChange { reason, follow_up },
         },
         PlanOutcome::Conflict { reason } => conflict_result(reason),
-        // A conversation-only step that just asks a blocking question: a dry
-        // run reports the question and leaves the pending list untouched.
-        PlanOutcome::Ready { plan }
-            if options.dry_run
-                && plan.operations.is_empty()
-                && plan
-                    .follow_up
-                    .iter()
-                    .any(|q| q.kind == contracts::QuestionKind::BlockingClarification) =>
-        {
-            ModifyResult {
-                summary: questions_summary(&plan.follow_up),
-                outcome: ModifyOutcome::NeedsClarification {
-                    questions: plan.follow_up,
-                },
-            }
-        }
+        // Conversation-only plans preview like source edits. Applying the
+        // zero-file plan persists its question under the checked plan/revision;
+        // the dry run remains read-only.
         PlanOutcome::Ready { plan } if options.dry_run => {
             match apply::prepare(project_path, &plan, conversation_id)? {
                 apply::PrepareOutcome::Ready(prepared) => ModifyResult {
@@ -595,13 +597,13 @@ fn run_request(
                     Some(&snapshot),
                     "",
                 ),
-                apply::ApplyOutcome::Replayed(record) => applied_result(
+                apply::ApplyOutcome::Replayed(record) => replay_with_current_questions(applied_result(
                     record.plan_id,
                     record.changed_files,
                     Some(&plan),
                     Some(&snapshot),
                     " (already applied)",
-                ),
+                ), project_path, conversation_id)?,
                 apply::ApplyOutcome::Conflict { reason } => conflict_result(reason),
                 apply::ApplyOutcome::Unsupported { reason } => unsupported_result(command, reason),
             }

@@ -3,13 +3,17 @@
 
 use std::sync::mpsc::{channel, Receiver, Sender};
 
+use crate::preview::Action;
+use crate::review::{Expected, Sent};
 use protopie_api::{
-    AbortProjectRequest, AbortProjectResponse, AnswerProjectRequest, ChatRequest, ChatResponse, CreateProjectRequest,
-    CreateProjectResponse, ErrorResponse, ListProjectsResponse, ModifyProjectRequest,
-    ModifyProjectResponse, ProjectInfo, CHAT_PATH, PROJECTS_ABORT_PATH, PROJECTS_ANSWER_PATH,
+    AbortProjectRequest, AbortProjectResponse, AnswerProjectRequest, ChatRequest, ChatResponse,
+    CreateProjectRequest, CreateProjectResponse, ErrorResponse, ListProjectsResponse,
+    ModifyProjectRequest, ModifyProjectResponse, PreviewLogRequest, PreviewLogResponse,
+    PreviewProjectRequest, PreviewStatusResponse, ProjectInfo, RuntimeCheckResponse, CHAT_PATH,
+    PREVIEW_LAUNCH_PATH, PREVIEW_LOGS_PATH, PREVIEW_RESTART_PATH, PREVIEW_RUNTIME_PATH,
+    PREVIEW_STATUS_PATH, PREVIEW_STOP_PATH, PROJECTS_ABORT_PATH, PROJECTS_ANSWER_PATH,
     PROJECTS_MODIFY_PATH, PROJECTS_PATH,
 };
-use crate::review::{Expected, Sent};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
@@ -20,10 +24,25 @@ pub enum Event {
     /// Reply to a project command or answer. `applied` is false for a preview.
     Modified {
         applied: bool,
+        project_path: String,
+        request_id: String,
         result: Result<ModifyProjectResponse, String>,
     },
     Projects(Result<Vec<ProjectInfo>, String>),
     ProjectCreated(Result<CreateProjectResponse, String>),
+    PreviewRuntime {
+        epoch: u64,
+        result: Result<RuntimeCheckResponse, String>,
+    },
+    PreviewStatus {
+        epoch: u64,
+        operation: bool,
+        result: Result<PreviewStatusResponse, String>,
+    },
+    PreviewLogs {
+        epoch: u64,
+        result: Result<PreviewLogResponse, String>,
+    },
 }
 
 pub struct ApiClient {
@@ -91,6 +110,28 @@ impl ApiClient {
     pub fn send(&self, project_path: String, sent: Sent, expected: Option<Expected>) {
         let request_id = new_request_id();
         let applied = expected.is_some();
+        let input = match &sent {
+            Sent::Command(command) => serde_json::json!({
+                "kind": "command", "command": protopie_api::diagnostics::bounded_text(command),
+            }),
+            Sent::Answer {
+                question_id,
+                option_key,
+            } => serde_json::json!({
+                "kind": "answer", "question_id": question_id,
+                "option_key": protopie_api::diagnostics::bounded_text(option_key),
+            }),
+        };
+        let _ = protopie_api::diagnostics::log_project_event(
+            std::path::Path::new(&project_path),
+            "gui",
+            serde_json::json!({
+                "kind": "request", "request_id": request_id, "conversation_id": CONVERSATION_ID,
+                "dry_run": !applied, "input": input,
+                "expected_revision": expected.as_ref().map(|e| e.revision),
+                "expected_plan_id": expected.as_ref().map(|e| &e.plan_id),
+            }),
+        );
         self.spawn(move |base| {
             let (expected_revision, expected_plan_id) = match expected {
                 Some(e) => (Some(e.revision), Some(e.plan_id)),
@@ -100,10 +141,10 @@ impl ApiClient {
                 Sent::Command(command) => post_json(
                     &format!("{base}{PROJECTS_MODIFY_PATH}"),
                     ModifyProjectRequest {
-                        project_path,
+                        project_path: project_path.clone(),
                         command,
                         conversation_id: Some(CONVERSATION_ID.into()),
-                        request_id: applied.then_some(request_id),
+                        request_id: Some(request_id.clone()),
                         dry_run: !applied,
                         expected_revision,
                         expected_plan_id,
@@ -115,19 +156,24 @@ impl ApiClient {
                 } => post_json(
                     &format!("{base}{PROJECTS_ANSWER_PATH}"),
                     AnswerProjectRequest {
-                        project_path,
+                        project_path: project_path.clone(),
                         question_id,
                         option_key: Some(option_key),
                         text: None,
                         conversation_id: Some(CONVERSATION_ID.into()),
-                        request_id: applied.then_some(request_id),
+                        request_id: Some(request_id.clone()),
                         dry_run: !applied,
                         expected_revision,
                         expected_plan_id,
                     },
                 ),
             };
-            Event::Modified { applied, result }
+            Event::Modified {
+                applied,
+                project_path,
+                request_id,
+                result,
+            }
         });
     }
 
@@ -154,6 +200,58 @@ impl ApiClient {
                 &format!("{base}{PROJECTS_PATH}"),
                 CreateProjectRequest { base_path, name },
             ))
+        });
+    }
+
+    pub fn preview_runtime(&self, epoch: u64) {
+        self.spawn(move |base| Event::PreviewRuntime {
+            epoch,
+            result: get_json(&format!("{base}{PREVIEW_RUNTIME_PATH}")),
+        });
+    }
+
+    pub fn preview_status(&self, epoch: u64) {
+        self.spawn(move |base| Event::PreviewStatus {
+            epoch,
+            operation: false,
+            result: get_json(&format!("{base}{PREVIEW_STATUS_PATH}")),
+        });
+    }
+
+    pub fn preview_action(&self, epoch: u64, action: Action, project_path: String) {
+        self.spawn(move |base| {
+            let result = match action {
+                Action::Launch => post_json(
+                    &format!("{base}{PREVIEW_LAUNCH_PATH}"),
+                    PreviewProjectRequest { project_path },
+                ),
+                Action::Restart => post_json(
+                    &format!("{base}{PREVIEW_RESTART_PATH}"),
+                    PreviewProjectRequest { project_path },
+                ),
+                Action::Stop => post_json(
+                    &format!("{base}{PREVIEW_STOP_PATH}"),
+                    PreviewProjectRequest { project_path },
+                ),
+            };
+            Event::PreviewStatus {
+                epoch,
+                operation: true,
+                result,
+            }
+        });
+    }
+
+    pub fn preview_logs(&self, epoch: u64, project_path: String, cursor: u64) {
+        self.spawn(move |base| Event::PreviewLogs {
+            epoch,
+            result: post_json(
+                &format!("{base}{PREVIEW_LOGS_PATH}"),
+                PreviewLogRequest {
+                    project_path,
+                    cursor,
+                },
+            ),
         });
     }
 
@@ -190,5 +288,31 @@ mod tests {
         assert!(CONVERSATION_ID
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'));
+    }
+
+    #[test]
+    fn gui_request_log_keeps_prompt_and_correlation_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("p");
+        std::fs::create_dir(&project).unwrap();
+        let client = ApiClient::new("http://127.0.0.1:1".into());
+        client.send(
+            project.to_string_lossy().into_owned(),
+            Sent::Command("Share the selected doctor across pages".into()),
+            None,
+        );
+        let dir = protopie_api::diagnostics::project_log_dir(&project).unwrap();
+        let log = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+        let entry: serde_json::Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+        assert_eq!(entry["source"], "gui");
+        assert_eq!(
+            entry["event"]["input"]["command"],
+            "Share the selected doctor across pages"
+        );
+        assert_eq!(entry["event"]["dry_run"], true);
+        assert!(entry["event"]["request_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("gui-"));
     }
 }

@@ -48,7 +48,7 @@ fn expect(dir: &Path, text: &str, want: &str) -> ModifyResult {
 
 fn question(result: &ModifyResult) -> Question {
     match &result.outcome {
-        ModifyOutcome::NeedsClarification { questions } => {
+        ModifyOutcome::NeedsClarification { questions, .. } => {
             assert_eq!(questions.len(), 1, "{result:?}");
             questions[0].clone()
         }
@@ -282,9 +282,10 @@ fn previews_and_unanswered_questions_never_write_source() {
         dry_run: true,
         ..Default::default()
     };
-    // A dry run of the opening request asks but leaves the conversation alone.
+    // A dry run previews the question-only plan and leaves the conversation alone.
     let r = modify_with(&dir, "Share the selected doctor across pages", &dry).unwrap();
-    assert_eq!(kind(&r), "needs_clarification", "{r:?}");
+    assert_eq!(kind(&r), "preview", "{r:?}");
+    assert!(matches!(&r.outcome, ModifyOutcome::Preview { changed_files, .. } if changed_files.is_empty()));
     assert!(load_session(&dir, DEFAULT_CONVERSATION_ID)
         .unwrap()
         .pending_questions
@@ -305,7 +306,8 @@ fn previews_and_unanswered_questions_never_write_source() {
     );
     // The final step previews as a diff of exactly the files it generates.
     let r = modify_with(&dir, "doctors", &dry).unwrap();
-    assert_eq!(kind(&r), "needs_clarification", "{r:?}");
+    assert_eq!(kind(&r), "preview", "{r:?}");
+    assert!(matches!(&r.outcome, ModifyOutcome::Preview { changed_files, .. } if changed_files.is_empty()));
     let r = modify(&dir, "doctors").unwrap();
     assert_eq!(kind(&r), "needs_clarification", "{r:?}");
     let r = modify_with(&dir, "done", &dry).unwrap();

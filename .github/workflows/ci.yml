@@ -27,9 +27,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.12.0
           cache: npm
           cache-dependency-path: reference/package-lock.json
+      - run: node --version && npm --version
       - run: npm ci
         working-directory: reference
       - run: cargo test -p protopie-ui-agent --test generated_build -- --ignored --nocapture
+      # This test creates a fresh project, performs its own first npm ci,
+      # requests Vite over loopback, then stops and verifies process reaping.
+      - run: cargo test -p protopie-server preview::tests::real_first_install_serves_and_reaps -- --ignored --exact --nocapture
+      # Exercises create, launch, preview, structured answer, Apply, and Vite
+      # transformed modules through the server HTTP routes. Runtime failures
+      # and missing Node/npm fail this ignored test when explicitly selected.
+      - run: cargo test -p protopie-server tests::real_http_conversation_serves_generated_modules_and_reaps -- --ignored --exact --nocapture

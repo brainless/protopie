@@ -177,7 +177,7 @@ fn form_below_hero_asks_for_content_and_then_generates() {
 
     // Content is asked for, persisted, and nothing is written.
     let result = expect(&dir, "add a form below hero", "needs_clarification");
-    let ModifyOutcome::NeedsClarification { questions } = &result.outcome else {
+    let ModifyOutcome::NeedsClarification { questions, .. } = &result.outcome else {
         unreachable!()
     };
     assert_eq!(questions.len(), 1);
@@ -269,7 +269,7 @@ fn generated_elements_work_with_styles_and_relational_selectors() {
     // last edit focused form_1, so forget it first: focus breaks ties.)
     clear_focus(&dir);
     let result = expect(&dir, "Increase form padding", "needs_clarification");
-    let ModifyOutcome::NeedsClarification { questions } = &result.outcome else {
+    let ModifyOutcome::NeedsClarification { questions, .. } = &result.outcome else {
         unreachable!()
     };
     let keys: Vec<_> = questions[0].options.iter().map(|o| o.key.as_str()).collect();
@@ -522,7 +522,7 @@ fn ambiguous_anchors_ask_which_and_the_answer_places_the_element() {
     add_image(&dir, "Add an image", "Second");
     clear_focus(&dir);
     let result = expect(&dir, "Add a button called Go below the image", "needs_clarification");
-    let ModifyOutcome::NeedsClarification { questions } = &result.outcome else {
+    let ModifyOutcome::NeedsClarification { questions, .. } = &result.outcome else {
         unreachable!()
     };
     assert!(questions[0].prompt.contains("Which image"));
@@ -609,7 +609,8 @@ fn dry_runs_never_touch_files_state_or_pending_questions() {
     };
     let before = (model(&dir), load_session(&dir, DEFAULT_CONVERSATION_ID).unwrap());
     let result = modify_with(&dir, "add a form below hero", &options).unwrap();
-    assert_eq!(kind(&result), "needs_clarification");
+    assert_eq!(kind(&result), "preview");
+    assert!(matches!(&result.outcome, ModifyOutcome::Preview { changed_files, .. } if changed_files.is_empty()));
     assert_eq!(
         (model(&dir), load_session(&dir, DEFAULT_CONVERSATION_ID).unwrap()),
         before

@@ -56,6 +56,7 @@ pub fn review_for(response: &ModifyProjectResponse) -> Review {
         Some(ModifyOutcome::Preview {
             plan_id,
             base_revision,
+            changed_files,
             ..
         }) => {
             return Review {
@@ -65,7 +66,12 @@ pub fn review_for(response: &ModifyProjectResponse) -> Review {
                 }),
                 buttons: vec![
                     Button {
-                        label: "Apply changes".into(),
+                        label: if changed_files.is_empty() {
+                            "Continue"
+                        } else {
+                            "Apply changes"
+                        }
+                        .into(),
                         choice: Choice::Apply,
                     },
                     Button {
@@ -77,7 +83,14 @@ pub fn review_for(response: &ModifyProjectResponse) -> Review {
         }
         Some(ModifyOutcome::Applied { questions, .. })
         | Some(ModifyOutcome::NoChange { questions, .. })
-        | Some(ModifyOutcome::NeedsClarification { questions }) => questions,
+        | Some(ModifyOutcome::NeedsClarification {
+            questions,
+            persisted: true,
+        }) => questions,
+        // Parser/resolver suggestions are not stored in the conversation.
+        Some(ModifyOutcome::NeedsClarification {
+            persisted: false, ..
+        }) => return Review::default(),
         _ => return Review::default(),
     };
     let several = questions.len() > 1;
@@ -153,6 +166,22 @@ mod tests {
     }
 
     #[test]
+    fn question_only_preview_requires_continue_before_options_can_be_answered() {
+        let review = review_for(&response(ModifyOutcome::Preview {
+            plan_id: "question-plan".into(),
+            base_revision: 7,
+            changed_files: vec![],
+            diffs: vec![],
+            questions: vec![question("shape")],
+        }));
+        assert_eq!(review.buttons[0].label, "Continue");
+        assert_eq!(review.buttons[0].choice, Choice::Apply);
+        assert_eq!(review.buttons[1].choice, Choice::Discard);
+        assert_eq!(review.expected.as_ref().unwrap().revision, 7);
+        assert_eq!(review.expected.as_ref().unwrap().plan_id, "question-plan");
+    }
+
+    #[test]
     fn questions_become_structured_option_buttons() {
         let review = review_for(&response(ModifyOutcome::Applied {
             plan_id: "p".into(),
@@ -168,11 +197,24 @@ mod tests {
                 option_key: "unlinked".into()
             }
         );
-        let two = review_for(&response(ModifyOutcome::NeedsClarification {
+        let two_applied = review_for(&response(ModifyOutcome::Applied {
+            plan_id: "p2".into(),
+            changed_files: vec![],
             questions: vec![question("q1"), question("q2")],
         }));
-        assert_eq!(two.buttons.len(), 4);
-        assert_eq!(two.buttons[2].label, "2: A new page");
+        assert_eq!(two_applied.buttons.len(), 4);
+        assert_eq!(two_applied.buttons[2].label, "2: A new page");
+        let two = review_for(&response(ModifyOutcome::NeedsClarification {
+            questions: vec![question("q1"), question("q2")],
+            persisted: false,
+        }));
+        assert!(two.buttons.is_empty());
+        let stored = review_for(&response(ModifyOutcome::NeedsClarification {
+            questions: vec![question("shape")],
+            persisted: true,
+        }));
+        assert_eq!(stored.buttons.len(), 2);
+        assert_eq!(stored.buttons[0].label, "A new page");
     }
 
     #[test]
@@ -181,6 +223,8 @@ mod tests {
             ModifyOutcome::Conflict { reason: "x".into() },
             ModifyOutcome::Unsupported {
                 explanation: "x".into(),
+                reason: None,
+                span: None,
             },
         ] {
             assert_eq!(review_for(&response(outcome)), Review::default());
@@ -190,13 +234,14 @@ mod tests {
             outcome: None,
         };
         assert_eq!(review_for(&old), Review::default());
-        // A question that takes text has no option buttons.
+        // A nonpersisted question that takes text has no option buttons.
         let mut q = question("q");
         q.options.clear();
         q.option_keys.clear();
         q.takes_text = true;
         let r = review_for(&response(ModifyOutcome::NeedsClarification {
             questions: vec![q],
+            persisted: false,
         }));
         assert!(r.buttons.is_empty());
     }

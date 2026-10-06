@@ -219,7 +219,7 @@ fn ambiguous_images_ask_which_and_write_nothing() {
     let (_tmp, dir) = styled_project();
     let before = css(&dir);
     let result = modify(&dir, "Image needs rounded corners").unwrap();
-    let ModifyOutcome::NeedsClarification { questions } = &result.outcome else {
+    let ModifyOutcome::NeedsClarification { questions, .. } = &result.outcome else {
         panic!("{result:?}")
     };
     assert_eq!(questions.len(), 1);
@@ -248,7 +248,7 @@ fn ambiguous_images_ask_which_and_write_nothing() {
 fn answering_the_which_image_question_applies_the_change() {
     use protopie_ui_agent::answer_with;
     let (_tmp, dir) = styled_project();
-    let ModifyOutcome::NeedsClarification { questions } =
+    let ModifyOutcome::NeedsClarification { questions, .. } =
         modify(&dir, "Image needs rounded corners").unwrap().outcome
     else {
         panic!()

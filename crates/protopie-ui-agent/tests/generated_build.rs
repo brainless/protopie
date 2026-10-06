@@ -327,3 +327,75 @@ fn generated_contexts_type_check_and_build() {
         },
     );
 }
+
+/// Epic 003 T5: exercise the supported families together in one fresh project.
+/// The browser and Vite runtime checks are tracked separately in the epic.
+#[test]
+#[ignore = "needs Node: run `npm ci` in reference/, then pass --ignored"]
+fn generated_mvp_scenario_type_checks_and_builds() {
+    generate_build_check(
+        "mvp-scenario",
+        |_| {},
+        &[
+            "Need a top navigation",
+            "Add Contact Us",
+            "new page",
+            "Add Overview",
+            "existing page or section",
+            "2",
+            "Add Docs",
+            "external url",
+            "https://example.com/docs?a=1&b=2",
+            "Add Soon",
+            "leave unlinked",
+            "Add a Doctors page",
+            "Add a Visits page",
+            "add a form below hero",
+            "Name, Email, Message",
+            "Get a callback",
+            "Need a footer",
+            "Made with care",
+            "add an image above the footer",
+            "https://example.com/cat.png",
+            "A cat on a sofa",
+            "Add a button called Get in Touch",
+            "new page",
+            "Give the form below hero more padding",
+            "Give the hero more padding",
+            "Image needs rounded corners",
+            "Image needs full width",
+            "Increase footer padding",
+            "Move the footer above the image",
+            "Share the selected doctor across pages",
+            "text",
+            "Dr. Rao",
+            "doctors",
+            "done",
+        ],
+        |project| {
+            let router = std::fs::read_to_string(project.join("src/router.ts")).unwrap();
+            for path in ["/contact-us", "/doctors", "/visits", "/get-in-touch"] {
+                assert!(router.contains(path), "missing {path} in {router}");
+            }
+            let nav = std::fs::read_to_string(project.join("src/components/TopNav.tsx")).unwrap();
+            for destination in [
+                "href={\"/contact-us\"}",
+                "href={\"/contact-us\"}>{\"Overview\"}",
+                "href={\"https://example.com/docs?a=1\\u0026b=2\"}",
+                "<span class={styles.label}>{\"Soon\"}</span>",
+            ] {
+                assert!(nav.contains(destination), "missing {destination} in {nav}");
+            }
+            let app = std::fs::read_to_string(project.join("src/App.tsx")).unwrap();
+            assert!(app.contains("<SelectedDoctorProvider>"), "{app}");
+            let doctors = std::fs::read_to_string(project.join("src/pages/DoctorsPage.tsx")).unwrap();
+            assert!(doctors.contains("useContext(SelectedDoctorContext)"), "{doctors}");
+            let home = std::fs::read_to_string(project.join("src/pages/Home.tsx")).unwrap();
+            for component in ["<Form1 />", "<Footer1 />", "<Image1 />", "<Button1 />"] {
+                assert!(home.contains(component), "missing {component} in {home}");
+            }
+            let form_css = std::fs::read_to_string(project.join("src/components/Form1.module.css")).unwrap();
+            assert!(form_css.contains("padding: var(--space-7) var(--space-5);"), "{form_css}");
+        },
+    );
+}

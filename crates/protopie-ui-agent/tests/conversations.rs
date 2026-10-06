@@ -101,7 +101,7 @@ fn run_conversation(fixture: &Value) {
             ModifyOutcome::Applied { follow_up, .. }
             | ModifyOutcome::Preview { follow_up, .. }
             | ModifyOutcome::NoChange { follow_up, .. } => follow_up.clone(),
-            ModifyOutcome::NeedsClarification { questions } => questions.clone(),
+            ModifyOutcome::NeedsClarification { questions, .. } => questions.clone(),
             _ => Vec::new(),
         };
         let want = strings(&expect["questions"]);

@@ -1,11 +1,11 @@
 # protopie
 
-Single-column agent chat (sidebar width) built on [akar](https://github.com/brainless/akar).
+Local project chat and live browser preview, built with [akar](https://github.com/brainless/akar).
 
 | Crate | Role |
 |---|---|
 | `protopie-api` | Wire types shared by server and clients |
-| `protopie-server` | Axum HTTP server; `POST /chat` echoes the prompt |
-| `protopie-gui` | akar/winit chat UI; spawns `protopie-server` as a child process |
+| `protopie-server` | Axum HTTP server for projects, chat edits, and Vite preview |
+| `protopie-gui` | akar/winit desktop UI; starts `protopie-server` as a child process |
 
-Run: `./run.sh` (builds both crates, then starts the GUI, which launches the server).
+Run `./run.sh` to build and start the GUI and its server. See [MVP guide](docs/mvp.md) for requirements, the project and preview workflow, examples, limits, and verification commands.

@@ -321,6 +321,7 @@ Append decisions here with task ID, chosen rule, representative input/output, an
   Add <label> [to top nav]
   Add an item called <label> [to top nav]
   Add an item named <label> [to top nav]
+  Add link "<label>" to top nav | Add link "<label>" to top navigation
   Add a <label> page
   Image needs rounded corners | Image needs full width
   Give the form below hero more padding | Give the form less padding
@@ -328,6 +329,8 @@ Append decisions here with task ID, chosen rule, representative input/output, an
   ```
 
   `<label>` is a nonempty unquoted sequence or an ASCII double-quoted literal. Unquoted labels retain original casing and interior whitespace; the final complete `to top nav` phrase marks an explicit container, so earlier such words stay in the label. Bare `and` and `then` mark unsupported continuation. A quoted label may contain syntax words and conjunctions and decodes only `\"` and `\\`; its source span excludes the quotes and retains the raw interior bytes. The bare `Add navigation to top nav` boundary remains a `NeedsClarification` case with the suggestion `Add "navigation" to top nav`. The four navigation aliases alone permit one attached final period. The parser returns `Unsupported` for malformed or unmatched quotes, unsupported punctuation on syntax words, unsupported targets/properties, negation, and extra instructions; it never returns a partially parsed request. Exact reason and span rules remain in the task-specific decisions above and active tests.
+
+  Epic 003 GUI diagnostic follow-up: the two `Add link "<label>" to top nav/navigation` forms are narrow aliases for the same explicit-top-navigation labelled item. They require a double-quoted label and the complete target; `link` is not part of the label. The label and target retain UTF-8 byte spans in the original prompt. Extra words after the target are `UnsupportedTail`. Parsing does not choose the item's eventual page or URL; the existing destination clarification still follows Apply. Other link phrasing remains outside this addition.
 
 - T7: Deferred syntax includes other navigation aliases/articles, arbitrary element roles or container targets, destinations and routes, move/remove commands, further selector relations, plural roles, numeric or axis-specific style values, extra properties, other quote delimiters or escapes, typo correction, and general natural-language phrasing. These need explicit syntax tests and capability checks before acceptance. Repeated `to top nav` phrases follow the T4 rightmost-boundary rule: `Add Contact Us to top nav to top nav` parses as the label `Contact Us to top nav` with the final phrase as its target. The T7 adversarial table specifies that outcome alongside empty, punctuation, multibyte, and malformed-quote inputs. Every returned span in that table is checked for bounds and UTF-8 character boundaries.
 

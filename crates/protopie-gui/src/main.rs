@@ -1,5 +1,6 @@
 mod chat;
 mod client;
+mod preview;
 mod review;
 mod server;
 
@@ -78,7 +79,14 @@ impl ApplicationHandler for App {
             config.format,
             akar_core::TextPipelineConfig::default(),
         );
-        self.gfx = Some(Gfx { window, device, queue, surface, config, core });
+        self.gfx = Some(Gfx {
+            window,
+            device,
+            queue,
+            surface,
+            config,
+            core,
+        });
     }
 
     fn window_event(
@@ -92,6 +100,7 @@ impl ApplicationHandler for App {
 
         match &event {
             WindowEvent::CloseRequested => {
+                self.chat.close();
                 event_loop.exit();
                 return;
             }

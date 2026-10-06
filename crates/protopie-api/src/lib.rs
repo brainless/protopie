@@ -1,7 +1,163 @@
 use serde::{Deserialize, Serialize};
 
+pub mod diagnostics;
+
 pub const CHAT_PATH: &str = "/chat";
 pub const HEALTH_PATH: &str = "/health";
+pub const PREVIEW_RUNTIME_PATH: &str = "/preview/runtime";
+pub const PREVIEW_LAUNCH_PATH: &str = "/preview/launch";
+pub const PREVIEW_STOP_PATH: &str = "/preview/stop";
+pub const PREVIEW_RESTART_PATH: &str = "/preview/restart";
+pub const PREVIEW_STATUS_PATH: &str = "/preview/status";
+pub const PREVIEW_LOGS_PATH: &str = "/preview/logs";
+
+/// Kept in sync with the Vite and Solid Vite plugin versions in the template lockfile.
+pub const REQUIRED_NODE_RANGE: &str = "^20.19.0 || >=22.12.0";
+
+/// Chat suggestions. Prerequisites describe when the command can produce a plan.
+pub struct ChatExample {
+    pub prompt: &'static str,
+    pub prerequisite: &'static str,
+    pub next_step: &'static str,
+}
+
+pub const CHAT_EXAMPLES: &[ChatExample] = &[
+    ChatExample {
+        prompt: "Need a top navigation",
+        prerequisite: "Fresh project",
+        next_step: "Preview, then Apply",
+    },
+    ChatExample {
+        prompt: "Add a Doctors page",
+        prerequisite: "Fresh project",
+        next_step: "Preview, then Apply",
+    },
+    ChatExample {
+        prompt: "Add a form below hero",
+        prerequisite: "Fresh project",
+        next_step: "Answer fields and submit label, then preview and Apply",
+    },
+    ChatExample {
+        prompt: "Give the form below hero more padding",
+        prerequisite: "Apply 'Add a form below hero' first",
+        next_step: "Preview, then Apply",
+    },
+    ChatExample {
+        prompt: "Share the selected doctor across pages",
+        prerequisite: "Apply 'Add a Doctors page' first",
+        next_step: "Answer type, value, destination and done; preview and Apply",
+    },
+];
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeExecutable {
+    /// Absolute path to the executable used by the preview manager.
+    pub path: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeFailure {
+    MissingExecutable {
+        tool: String,
+        message: String,
+    },
+    UnsupportedVersion {
+        tool: String,
+        found: String,
+        required: String,
+        message: String,
+    },
+    CommandFailed {
+        tool: String,
+        path: String,
+        details: String,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeStatus {
+    Available,
+    Unavailable { reason: RuntimeFailure },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeCheckResponse {
+    pub node: Option<RuntimeExecutable>,
+    pub npm: Option<RuntimeExecutable>,
+    pub required_node_range: String,
+    pub status: RuntimeStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviewProjectRequest {
+    pub project_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviewLogRequest {
+    pub project_path: String,
+    /// Return lines after this cursor. Zero starts at the oldest retained line.
+    pub cursor: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PreviewFailure {
+    Environment { reason: RuntimeFailure },
+    UnsupportedProject { message: String },
+    Install { message: String },
+    Start { message: String },
+    Readiness { message: String },
+    Exited { message: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PreviewState {
+    Stopped,
+    Preparing { step: String },
+    Starting,
+    Running { url: String },
+    Failed { reason: PreviewFailure },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviewStatusResponse {
+    /// Canonical path of the active project, if one is selected for preview.
+    pub project_path: Option<String>,
+    /// Increments for each launch, stop, restart, or project switch.
+    pub generation: u64,
+    pub state: PreviewState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewLogStream {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviewLogLine {
+    pub cursor: u64,
+    pub stream: PreviewLogStream,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviewLogResponse {
+    pub project_path: Option<String>,
+    pub generation: u64,
+    /// Send this value in the next request, even when `lines` is empty.
+    pub next_cursor: u64,
+    /// Earlier lines were discarded before the supplied cursor was served.
+    pub truncated: bool,
+    pub lines: Vec<PreviewLogLine>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatRequest {
@@ -61,6 +217,34 @@ pub struct ProjectInfo {
     pub name: String,
     /// Full path of the project folder.
     pub path: String,
+    /// Last modification of `.protopie/model.json`, milliseconds since Unix epoch.
+    #[serde(default)]
+    pub last_modified_unix_ms: Option<u64>,
+    /// Why this folder cannot be opened as a template-derived project.
+    #[serde(default)]
+    pub unavailable_reason: Option<String>,
+}
+
+#[cfg(test)]
+mod project_info_tests {
+    use super::ProjectInfo;
+
+    #[test]
+    fn eligibility_and_model_timestamp_round_trip_and_old_lists_decode() {
+        let old: ProjectInfo = serde_json::from_str(r#"{"name":"old","path":"/p/old"}"#).unwrap();
+        assert!(old.last_modified_unix_ms.is_none());
+        assert!(old.unavailable_reason.is_none());
+        let listed = ProjectInfo {
+            name: "old".into(),
+            path: "/p/old".into(),
+            last_modified_unix_ms: Some(42),
+            unavailable_reason: Some("Create a project from the reference template.".into()),
+        };
+        assert_eq!(
+            serde_json::from_str::<ProjectInfo>(&serde_json::to_string(&listed).unwrap()).unwrap(),
+            listed
+        );
+    }
 }
 
 /// Response of `GET /projects`.
@@ -170,6 +354,32 @@ pub struct QuestionSummary {
     pub blocking: bool,
 }
 
+/// Half-open UTF-8 byte range in the submitted command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticSpan {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ParserRejectionReason {
+    EmptyInput,
+    UnrecognizedInput,
+    IncompleteInput,
+    NegatedRequest,
+    UnsupportedTail,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RejectionReason {
+    Parse { reason: ParserRejectionReason },
+    CapabilityNotImplemented,
+    TargetNotFound,
+    UnsupportedLayout,
+    ProjectNotInitialized,
+}
+
 /// Wire form of the agent's modify outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -194,6 +404,9 @@ pub enum ModifyOutcome {
     },
     NeedsClarification {
         questions: Vec<QuestionSummary>,
+        /// True only when a committed question-only plan stored these IDs.
+        #[serde(default)]
+        persisted: bool,
     },
     NoChange {
         reason: String,
@@ -201,6 +414,10 @@ pub enum ModifyOutcome {
     },
     Unsupported {
         explanation: String,
+        #[serde(default)]
+        reason: Option<RejectionReason>,
+        #[serde(default)]
+        span: Option<DiagnosticSpan>,
     },
     Conflict {
         reason: String,
@@ -227,8 +444,22 @@ impl ModifyProjectResponse {
             }
         }
         let questions: &[QuestionSummary] = match &self.outcome {
-            Some(ModifyOutcome::Unsupported { explanation }) => {
+            Some(ModifyOutcome::Unsupported {
+                explanation, span, ..
+            }) => {
                 text.push_str(&format!("\nUnsupported: {explanation}"));
+                if let Some(fragment) = span.and_then(|s| {
+                    (s.start < s.end)
+                        .then(|| self.reply.strip_prefix("received: "))
+                        .flatten()
+                        .and_then(|prompt| prompt.get(s.start..s.end))
+                }) {
+                    text.push_str(&format!("\nUnrecognized: “{fragment}”"));
+                    text.push_str(&format!(
+                        "\nTry: {}; {}; {}.",
+                        CHAT_EXAMPLES[0].prompt, CHAT_EXAMPLES[1].prompt, CHAT_EXAMPLES[2].prompt
+                    ));
+                }
                 &[]
             }
             Some(ModifyOutcome::Conflict { reason }) => {
@@ -239,11 +470,17 @@ impl ModifyProjectResponse {
             | Some(ModifyOutcome::Preview { questions, .. })
             | Some(ModifyOutcome::NoChange { questions, .. }) => questions,
             // Blocking questions are already the summary.
-            Some(ModifyOutcome::NeedsClarification { questions }) => {
+            Some(ModifyOutcome::NeedsClarification {
+                questions,
+                persisted,
+            }) => {
                 for q in questions {
                     for (i, option) in q.options.iter().enumerate() {
                         text.push_str(&format!("\n  {}. {option}", i + 1));
                     }
+                }
+                if !persisted {
+                    text.push_str("\nType a clarified request to continue.");
                 }
                 &[]
             }
@@ -268,6 +505,105 @@ pub struct ErrorResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_contract_round_trips_and_uses_stable_tags() {
+        let runtime = RuntimeCheckResponse {
+            node: Some(RuntimeExecutable {
+                path: "/usr/bin/node".into(),
+                version: "v22.12.0".into(),
+            }),
+            npm: Some(RuntimeExecutable {
+                path: "/usr/bin/npm".into(),
+                version: "10.0.0".into(),
+            }),
+            required_node_range: REQUIRED_NODE_RANGE.into(),
+            status: RuntimeStatus::Available,
+        };
+        let value = serde_json::to_value(&runtime).unwrap();
+        assert_eq!(value["status"]["kind"], "available");
+        assert_eq!(
+            serde_json::from_value::<RuntimeCheckResponse>(value).unwrap(),
+            runtime
+        );
+
+        let failure = RuntimeFailure::UnsupportedVersion {
+            tool: "node".into(),
+            found: "v18.0.0".into(),
+            required: REQUIRED_NODE_RANGE.into(),
+            message: "Install Node".into(),
+        };
+        let status = PreviewStatusResponse {
+            project_path: Some("/projects/a".into()),
+            generation: 4,
+            state: PreviewState::Failed {
+                reason: PreviewFailure::Environment { reason: failure },
+            },
+        };
+        let value = serde_json::to_value(&status).unwrap();
+        assert_eq!(value["state"]["kind"], "failed");
+        assert_eq!(value["state"]["reason"]["kind"], "environment");
+        assert_eq!(
+            value["state"]["reason"]["reason"]["kind"],
+            "unsupported_version"
+        );
+        assert_eq!(
+            serde_json::from_value::<PreviewStatusResponse>(value).unwrap(),
+            status
+        );
+
+        for state in [
+            PreviewState::Stopped,
+            PreviewState::Preparing {
+                step: "npm ci".into(),
+            },
+            PreviewState::Starting,
+            PreviewState::Running {
+                url: "http://127.0.0.1:5173/".into(),
+            },
+        ] {
+            let value = serde_json::to_value(&state).unwrap();
+            assert_eq!(
+                serde_json::from_value::<PreviewState>(value).unwrap(),
+                state
+            );
+        }
+        let request = PreviewLogRequest {
+            project_path: "/projects/a".into(),
+            cursor: 3,
+        };
+        assert_eq!(
+            serde_json::from_value::<PreviewLogRequest>(serde_json::to_value(&request).unwrap())
+                .unwrap(),
+            request
+        );
+        let logs = PreviewLogResponse {
+            project_path: Some(request.project_path),
+            generation: 4,
+            next_cursor: 5,
+            truncated: false,
+            lines: vec![PreviewLogLine {
+                cursor: 5,
+                stream: PreviewLogStream::Stderr,
+                text: "error".into(),
+            }],
+        };
+        assert_eq!(
+            serde_json::from_value::<PreviewLogResponse>(serde_json::to_value(&logs).unwrap())
+                .unwrap(),
+            logs
+        );
+        let request = PreviewProjectRequest {
+            project_path: "/projects/a".into(),
+        };
+        assert_eq!(
+            serde_json::from_value::<PreviewProjectRequest>(
+                serde_json::to_value(&request).unwrap()
+            )
+            .unwrap(),
+            request
+        );
+    }
 
     #[test]
     fn modify_request_ids_are_optional_on_the_wire() {
@@ -326,10 +662,17 @@ mod tests {
 
     #[test]
     fn preview_text_shows_diffs_and_old_previews_still_parse() {
-        let old: ModifyOutcome =
-            serde_json::from_str(r#"{"kind":"preview","plan_id":"p","changed_files":[],"questions":[]}"#)
-                .unwrap();
-        assert!(matches!(old, ModifyOutcome::Preview { base_revision: 0, .. }));
+        let old: ModifyOutcome = serde_json::from_str(
+            r#"{"kind":"preview","plan_id":"p","changed_files":[],"questions":[]}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            old,
+            ModifyOutcome::Preview {
+                base_revision: 0,
+                ..
+            }
+        ));
         let long: String = (0..50).map(|i| format!("+line {i}\n")).collect();
         let preview = ModifyProjectResponse {
             reply: "Preview: x".into(),
@@ -362,9 +705,35 @@ mod tests {
             reply: "received: x".into(),
             outcome: Some(ModifyOutcome::Unsupported {
                 explanation: "nope".into(),
+                reason: None,
+                span: None,
             }),
         };
         assert_eq!(unsupported.display_text(), "received: x\nUnsupported: nope");
+        let diagnostic = ModifyProjectResponse {
+            reply: "received: Add café widgets".into(),
+            outcome: Some(ModifyOutcome::Unsupported {
+                explanation: "unknown request".into(),
+                reason: Some(RejectionReason::Parse {
+                    reason: ParserRejectionReason::UnsupportedTail,
+                }),
+                span: Some(DiagnosticSpan { start: 10, end: 17 }),
+            }),
+        };
+        let encoded = serde_json::to_string(&diagnostic).unwrap();
+        let restored: ModifyProjectResponse = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(restored.outcome, diagnostic.outcome);
+        assert!(diagnostic
+            .display_text()
+            .contains("Unrecognized: “widgets”"));
+        assert!(diagnostic
+            .display_text()
+            .contains("Try: Need a top navigation"));
+        let mut invalid = diagnostic;
+        if let Some(ModifyOutcome::Unsupported { span, .. }) = &mut invalid.outcome {
+            *span = Some(DiagnosticSpan { start: 8, end: 10 }); // cuts through é
+        }
+        assert!(!invalid.display_text().contains("Unrecognized:"));
         let question = ModifyProjectResponse {
             reply: "Which?".into(),
             outcome: Some(ModifyOutcome::NeedsClarification {
@@ -376,8 +745,35 @@ mod tests {
                     takes_text: false,
                     blocking: true,
                 }],
+                persisted: false,
             }),
         };
-        assert_eq!(question.display_text(), "Which?\n  1. A\n  2. B");
+        assert_eq!(
+            question.display_text(),
+            "Which?\n  1. A\n  2. B\nType a clarified request to continue."
+        );
+    }
+
+    #[test]
+    fn clarification_wire_distinguishes_stored_questions_from_rephrase_suggestions() {
+        let old: ModifyOutcome =
+            serde_json::from_str(r#"{"kind":"needs_clarification","questions":[]}"#).unwrap();
+        assert!(matches!(
+            old,
+            ModifyOutcome::NeedsClarification {
+                persisted: false,
+                ..
+            }
+        ));
+        let stored = ModifyOutcome::NeedsClarification {
+            questions: vec![],
+            persisted: true,
+        };
+        let encoded = serde_json::to_value(&stored).unwrap();
+        assert_eq!(encoded["persisted"], true);
+        assert_eq!(
+            serde_json::from_value::<ModifyOutcome>(encoded).unwrap(),
+            stored
+        );
     }
 }

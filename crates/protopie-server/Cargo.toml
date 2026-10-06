@@ -7,7 +7,9 @@ edition = "2021"
 protopie-api = { workspace = true }
 protopie-ui-agent = { path = "../protopie-ui-agent" }
 axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "io-util", "sync", "time", "signal"] }
+serde_json = { workspace = true }
+libc = "0.2"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

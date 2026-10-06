@@ -737,6 +737,62 @@ fn parse_labelled_addition(input: &str, tokens: &[Token<'_>], span: Span) -> Opt
     )))
 }
 
+/// Narrow GUI-observed alias for a labelled item in the existing top navigation.
+/// Only a double-quoted label and an explicit `to top nav/navigation` target
+/// are accepted, so a later clause cannot be mistaken for label text.
+fn parse_link_alias(input: &str, tokens: &[Token<'_>], span: Span) -> Option<ParseOutcome> {
+    if tokens.len() < 3
+        || !token_matches(&tokens[0], "add", false)
+        || !token_matches(&tokens[1], "link", false)
+        || !input[tokens[2].span.start..].starts_with('"')
+    {
+        return None;
+    }
+    let unsupported = |reason, span| ParseOutcome::Unsupported(Unsupported { reason, span });
+    let (label, close) = match quoted_label(input, tokens[2].span.start, span) {
+        Ok(value) => value,
+        Err(outcome) => return Some(outcome),
+    };
+    if close < span.end && !input[close..].starts_with(char::is_whitespace) {
+        return Some(unsupported(UnsupportedReason::UnrecognizedInput, span));
+    }
+    let remaining: Vec<_> = tokens
+        .iter()
+        .filter(|token| token.span.start >= close)
+        .collect();
+    if remaining.len() < 3 {
+        return Some(unsupported(UnsupportedReason::IncompleteInput, span));
+    }
+    if !token_matches(remaining[0], "to", false)
+        || !token_matches(remaining[1], "top", false)
+        || !(token_matches(remaining[2], "nav", false)
+            || token_matches(remaining[2], "navigation", false))
+    {
+        return Some(unsupported(UnsupportedReason::UnrecognizedInput, span));
+    }
+    if remaining.len() > 3 {
+        return Some(unsupported(
+            UnsupportedReason::UnsupportedTail,
+            Span {
+                start: remaining[3].span.start,
+                end: span.end,
+            },
+        ));
+    }
+    Some(ParseOutcome::Parsed(Request::AddLabelledItem(
+        LabelledAddition {
+            label,
+            target: Some(ContainerTarget::TopNavigation {
+                span: Span {
+                    start: remaining[1].span.start,
+                    end: remaining[2].span.end,
+                },
+            }),
+            span,
+        },
+    )))
+}
+
 /// Role named by a single word (style grammar and anchors).
 fn role_word(text: &str) -> Option<ElementRole> {
     Some(match text.to_ascii_lowercase().as_str() {
@@ -1265,6 +1321,9 @@ pub fn parse(input: &str) -> ParseOutcome {
         return outcome;
     }
     if let Some(outcome) = parse_page_creation(input, &tokens, span) {
+        return outcome;
+    }
+    if let Some(outcome) = parse_link_alias(input, &tokens, span) {
         return outcome;
     }
     if let Some(outcome) = parse_labelled_addition(input, &tokens, span) {
@@ -2156,6 +2215,71 @@ mod tests {
                 span: Span { start: 2, end: 27 },
             }))
         );
+    }
+
+    #[test]
+    fn quoted_link_aliases_keep_label_and_target_utf8_spans() {
+        for target in ["top nav", "top navigation"] {
+            let input = format!("  Add link \"Café Features\" to {target}  ");
+            let ParseOutcome::Parsed(Request::AddLabelledItem(item)) = parse(&input) else {
+                panic!("{input:?}: {:?}", parse(&input));
+            };
+            assert_eq!(item.label.text, "Café Features");
+            assert_eq!(
+                &input[item.label.span.start..item.label.span.end],
+                "Café Features"
+            );
+            let Some(ContainerTarget::TopNavigation { span }) = &item.target else {
+                panic!("{item:?}")
+            };
+            assert_eq!(&input[span.start..span.end], target);
+            assert_eq!(
+                &input[item.span.start..item.span.end],
+                format!("Add link \"Café Features\" to {target}")
+            );
+            assert_all_spans_valid(
+                &input,
+                &ParseOutcome::Parsed(Request::AddLabelledItem(item)),
+            );
+        }
+    }
+
+    #[test]
+    fn quoted_link_aliases_reject_tails_and_incomplete_targets() {
+        for target in ["top nav", "top navigation"] {
+            let input = format!("Add link \"Features\" to {target} and delete the hero");
+            let ParseOutcome::Unsupported(unsupported) = parse(&input) else {
+                panic!("{input:?}: {:?}", parse(&input))
+            };
+            assert_eq!(unsupported.reason, UnsupportedReason::UnsupportedTail);
+            assert_eq!(
+                &input[unsupported.span.start..unsupported.span.end],
+                "and delete the hero"
+            );
+        }
+        for input in [
+            "Add link \"Features\"",
+            "Add link \"Features\" to",
+            "Add link \"Features\" to top",
+        ] {
+            assert!(
+                matches!(
+                    parse(input),
+                    ParseOutcome::Unsupported(Unsupported {
+                        reason: UnsupportedReason::IncompleteInput,
+                        ..
+                    })
+                ),
+                "{input}"
+            );
+        }
+        assert!(matches!(
+            parse("Add link \"Features\" to top navbar"),
+            ParseOutcome::Unsupported(Unsupported {
+                reason: UnsupportedReason::UnrecognizedInput,
+                ..
+            })
+        ));
     }
 
     #[test]
